@@ -1,0 +1,3058 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GULLY BADSHAH — Street Cricket RPG</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:#000;overflow:hidden;display:flex;align-items:center;justify-content:center;width:100vw;height:100vh;}
+#gc{display:block;image-rendering:auto;cursor:default;}
+#sub{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.92);color:#FFD700;padding:10px 26px;border-radius:24px;font-size:15px;display:none;text-align:center;border:1px solid rgba(255,215,0,.6);font-family:'Segoe UI',Arial,sans-serif;max-width:680px;z-index:20;pointer-events:none;letter-spacing:.4px;line-height:1.5;}
+#flash{position:fixed;top:32%;left:50%;transform:translate(-50%,-50%);color:#FFD700;font-size:58px;font-weight:900;text-shadow:0 0 40px #FFD700,0 0 80px rgba(255,215,0,.5);display:none;z-index:30;pointer-events:none;text-align:center;font-family:'Arial Black',Arial,sans-serif;letter-spacing:4px;white-space:nowrap;}
+</style>
+</head>
+<body>
+<canvas id="gc"></canvas>
+<div id="sub"></div>
+<div id="flash"></div>
+<script>
+'use strict';
+// ════════════════════════════════════════════════════════════════
+//  GULLY BADSHAH — Complete Street Cricket RPG
+//  Single-file | Canvas 2D | No frameworks | No external assets
+// ════════════════════════════════════════════════════════════════
+
+// ─── CANVAS SETUP ───────────────────────────────────────────────
+const gc = document.getElementById('gc');
+const cx = gc.getContext('2d');
+const SUB = document.getElementById('sub');
+const FLASH = document.getElementById('flash');
+
+const BASE_W = 1280, BASE_H = 720;
+let scaleX = 1, scaleY = 1, offX = 0, offY = 0;
+
+function resizeCanvas() {
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const ar = BASE_W / BASE_H;
+  let cw = vw, ch = vh;
+  if (vw / vh > ar) { cw = vh * ar; } else { ch = vw / ar; }
+  gc.width = BASE_W; gc.height = BASE_H;
+  gc.style.width = cw + 'px'; gc.style.height = ch + 'px';
+  scaleX = cw / BASE_W; scaleY = ch / BASE_H;
+  offX = (vw - cw) / 2; offY = (vh - ch) / 2;
+}
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+
+// ─── GAME STATES ────────────────────────────────────────────────
+const STATES = {
+  HOME:'HOME', SETUP:'SETUP', CHARACTER_SELECT:'CHARACTER_SELECT',
+  PERMISSION_SCENE:'PERMISSION_SCENE', MATCH_INTRO:'MATCH_INTRO',
+  TOSS:'TOSS', FIRST_INNINGS:'FIRST_INNINGS', INNINGS_BREAK:'INNINGS_BREAK',
+  SECOND_INNINGS:'SECOND_INNINGS', RESULT:'RESULT', REWARD:'REWARD',
+  TOURNAMENT_COMPLETE:'TOURNAMENT_COMPLETE', VEHARI_MODE:'VEHARI_MODE'
+};
+
+// ─── GLOBAL STATE ───────────────────────────────────────────────
+let G = {
+  state: STATES.HOME,
+  t: 0, dt: 0,
+  selectedChar: null,
+  xp: 0, level: 1,
+  unlockedBats: ['Tape Ball'],
+  vehairiUnlocked: false,
+  wasayRevealed: false,
+  tournamentData: null,
+  matchData: null,
+  matchMode: 'tournament',
+  permissionLine: 0,
+  permissionTimer: 0,
+  matchIntroTimer: 0,
+  tossResult: null,
+  tossChoice: null,
+  playerBatFirst: true,
+  inningsNum: 0,
+  coachMsg: '',
+  coachTimer: 0,
+  eventActive: false,
+  eventData: null,
+  eventTimer: 0,
+  resultData: null,
+  rewardData: null,
+  particles: [],
+  buttons: [],
+  mouse: {x:0, y:0, clicked:false, down:false},
+  keys: {},
+  flashTimer: 0,
+  flashText: '',
+  logoImg: null,
+  logoLoaded: false,
+  logoFailed: false,
+  logoAlpha: 0,
+  homeParticles: [],
+  hoverBtn: -1,
+  vehairiMatchIndex: 0,
+  runResultTimer: 0,
+  runResultText: '',
+  runResultColor: '#FFD700',
+  wasayRevealTimer: 0,
+  wasayRevealPhase: 0,
+};
+
+// ─── AUDIO SYSTEM ───────────────────────────────────────────────
+const Audio = (() => {
+  let actx = null;
+  const init = () => {
+    if (actx) return;
+    try { actx = new (window.AudioContext || window.webkitAudioContext)(); }
+    catch(e) { actx = null; }
+  };
+  const tone = (freq, dur, type='sine', vol=0.3, delay=0) => {
+    if (!actx) return;
+    const o = actx.createOscillator();
+    const g = actx.createGain();
+    o.connect(g); g.connect(actx.destination);
+    o.type = type; o.frequency.value = freq;
+    const t0 = actx.currentTime + delay;
+    g.gain.setValueAtTime(vol, t0);
+    g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+    o.start(t0); o.stop(t0 + dur + 0.05);
+  };
+  const noise = (dur, vol=0.1) => {
+    if (!actx) return;
+    const buf = actx.createBuffer(1, actx.sampleRate * dur, actx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i=0;i<d.length;i++) d[i] = Math.random()*2-1;
+    const src = actx.createBufferSource();
+    const g = actx.createGain();
+    const flt = actx.createBiquadFilter();
+    src.buffer = buf;
+    src.connect(flt); flt.connect(g); g.connect(actx.destination);
+    flt.type = 'bandpass'; flt.frequency.value = 600; flt.Q.value = 0.5;
+    g.gain.setValueAtTime(vol, actx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, actx.currentTime + dur);
+    src.start(); src.stop(actx.currentTime + dur + 0.05);
+  };
+  return {
+    init,
+    click: () => { tone(900, 0.05, 'square', 0.15); },
+    bat: (power) => {
+      const f = 400 + power*800;
+      tone(f, 0.08+power*0.05, 'square', 0.4);
+      tone(f/2, 0.12, 'triangle', 0.25);
+      noise(0.06+power*0.04, 0.08+power*0.12);
+    },
+    wicket: () => {
+      tone(200, 0.4, 'sawtooth', 0.5);
+      tone(140, 0.35, 'square', 0.3, 0.08);
+      noise(0.2, 0.2);
+    },
+    six: () => {
+      [523,659,784,1047].forEach((f,i) => tone(f,0.5,'sine',0.35,i*0.07));
+      noise(0.3, 0.25);
+    },
+    four: () => {
+      [440,554,659].forEach((f,i) => tone(f,0.35,'sine',0.3,i*0.06));
+      noise(0.15, 0.15);
+    },
+    crowd: (intensity=0.5) => {
+      for(let i=0;i<6;i++){
+        tone(60+Math.random()*80, 0.4+Math.random()*0.3, 'sawtooth',
+             0.01*intensity, Math.random()*0.15);
+      }
+      noise(0.5, 0.04*intensity);
+    },
+    cheer: () => {
+      for(let i=0;i<12;i++){
+        tone(300+Math.random()*500, 0.25+Math.random()*0.2, 'sine',
+             0.02, Math.random()*0.3);
+      }
+      noise(0.5, 0.08);
+    },
+    transition: () => {
+      [220,330,440,550].forEach((f,i) => tone(f,0.3,'sine',0.2,i*0.08));
+    },
+    reveal: () => {
+      [110,165,220,330,440,660,880].forEach((f,i) => tone(f,1.2,'sine',0.15,i*0.12));
+      tone(880, 1.5, 'triangle', 0.3, 0.9);
+      noise(0.4, 0.15);
+    },
+    resume: () => { if(actx && actx.state==='suspended') actx.resume(); }
+  };
+})();
+
+// ─── VOICE SYSTEM ───────────────────────────────────────────────
+const Voice = (() => {
+  let enabled = true;
+  const tones = { calm: 1.0, aggressive: 1.2, funny: 0.9, hype: 1.4, dramatic: 0.8 };
+  const rates = { calm: 0.9, aggressive: 1.1, funny: 1.0, hype: 1.2, dramatic: 0.85 };
+
+  const play = (text, toneName='calm') => {
+    showSub(text);
+    if (!enabled || !window.speechSynthesis) return;
+    try {
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.pitch = tones[toneName] || 1.0;
+      u.rate = rates[toneName] || 1.0;
+      u.volume = 0.85;
+      const voices = window.speechSynthesis.getVoices();
+      const urdu = voices.find(v => v.lang.startsWith('ur') || v.lang.startsWith('hi'));
+      if (urdu) u.voice = urdu;
+      window.speechSynthesis.speak(u);
+    } catch(e) {}
+  };
+
+  const showSub = (text) => {
+    SUB.textContent = text;
+    SUB.style.display = 'block';
+    clearTimeout(SUB._t);
+    SUB._t = setTimeout(() => { SUB.style.display='none'; }, Math.max(2500, text.length*60));
+  };
+
+  return { play, showSub, enabled, toggle: () => { enabled = !enabled; } };
+})();
+
+// ─── LOGO SYSTEM ────────────────────────────────────────────────
+const LogoSystem = (() => {
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload = () => { G.logoLoaded = true; G.logoFailed = false; };
+  img.onerror = () => { G.logoFailed = true; G.logoLoaded = false; };
+  img.src = 'https://i.postimg.cc/m2NMpmBg/image.png';
+  G.logoImg = img;
+
+  const drawFallback = (x, y, w, alpha=1) => {
+    cx.save();
+    cx.globalAlpha = alpha;
+    const h = w * 0.55;
+    // Crown
+    cx.strokeStyle = '#FFD700'; cx.fillStyle = '#FFD700';
+    cx.lineWidth = 3;
+    // Base
+    cx.beginPath();
+    cx.roundRect(x - w*0.25, y + h*0.1, w*0.5, h*0.25, 4);
+    cx.fill();
+    // Crown points
+    const pts = [[0,-0.45],[-.22,-0.28],[-.4,-0.15],[.4,-0.15],[.22,-0.28]];
+    pts.forEach(([dx,dy]) => {
+      cx.beginPath();
+      cx.arc(x+dx*w, y+dy*h+h*0.05, w*0.04, 0, Math.PI*2);
+      cx.fill();
+    });
+    cx.beginPath();
+    cx.moveTo(x-w*0.4, y+h*0.1);
+    cx.lineTo(x-w*0.22, y-h*0.28+h*0.05);
+    cx.lineTo(x, y-h*0.45+h*0.05);
+    cx.lineTo(x+w*0.22, y-h*0.28+h*0.05);
+    cx.lineTo(x+w*0.4, y+h*0.1);
+    cx.closePath();
+    cx.fillStyle = 'rgba(255,215,0,0.3)';
+    cx.fill();
+    cx.strokeStyle = '#FFD700'; cx.lineWidth = 2;
+    cx.stroke();
+    // Stumps & bat
+    cx.strokeStyle = '#C8A400'; cx.lineWidth = 3;
+    [-12, 0, 12].forEach(ox => {
+      cx.beginPath();
+      cx.moveTo(x+ox, y+h*0.18);
+      cx.lineTo(x+ox, y+h*0.42);
+      cx.stroke();
+    });
+    // Bails
+    cx.strokeStyle = '#FFD700'; cx.lineWidth = 2;
+    cx.beginPath();
+    cx.moveTo(x-14, y+h*0.17); cx.lineTo(x+14, y+h*0.17); cx.stroke();
+    // Text
+    cx.font = `bold ${w*0.14}px 'Arial Black',Arial`;
+    cx.textAlign = 'center';
+    const grd = cx.createLinearGradient(x, y+h*0.5, x, y+h*0.78);
+    grd.addColorStop(0, '#FFD700');
+    grd.addColorStop(1, '#C8A400');
+    cx.fillStyle = grd;
+    cx.fillText('GULLY BADSHAH', x, y+h*0.72);
+    cx.restore();
+  };
+
+  const draw = (x, y, w, alpha=1, glowAmount=0) => {
+    cx.save();
+    cx.globalAlpha = alpha;
+    if (glowAmount > 0) {
+      cx.shadowColor = '#FFD700';
+      cx.shadowBlur = glowAmount;
+    }
+    if (G.logoLoaded) {
+      const h = w * (img.naturalHeight / img.naturalWidth);
+      cx.drawImage(img, x - w/2, y - h/2, w, h);
+    } else {
+      drawFallback(x, y, w, 1);
+    }
+    cx.restore();
+  };
+
+  return { draw, drawFallback };
+})();
+
+// ─── CHARACTERS ─────────────────────────────────────────────────
+const CHARACTERS = [
+  { id:'babu_bhai', name:'Babu Bhai', role:'Power Hitter', color:'#e63946',
+    stats:{bat:90,bowl:55,field:60,speed:65,stam:75},
+    desc:'Mohalle ka sabse bada hitter',
+    special:'Power Surge', signature:'The Big Six',
+    permission:["Ammi: Beta, kahan ja raha hai?","Babu Bhai: Mohalle mein cricket khelne Ammi...","Abu: Theek hai, par homework bhi karna hai.","Ammi: Aur haan beta... Badshah se bach ke rehna."] },
+  { id:'chhotu', name:'Chhotu', role:'Speed Runner', color:'#06d6a0',
+    stats:{bat:70,bowl:65,field:90,speed:98,stam:85},
+    desc:'Bhaagna iski fitrat hai',
+    special:'Speed Dash', signature:'Quick Single',
+    permission:["Bhai: Chhotu! Kahan bhag raha hai?","Chhotu: Cricket khelne bhai...","Dadi: Beta, dhoop mein mat khelo.","Bhai: Aur sun... Badshah se bach ke rehna."] },
+  { id:'billa', name:'Billa', role:'Style Player', color:'#a855f7',
+    stats:{bat:80,bowl:75,field:70,speed:72,stam:68},
+    desc:'Andaaz toh dekho yaaron',
+    special:'Style Shot', signature:'Reverse Sweep',
+    permission:["Baba: Billa, mirror se door jao.","Billa: Ji Baba, cricket khelne ja raha hun.","Mama: Style se khelo beta, dhyan raho.","Baba: Aur ek baat... Badshah se bach ke rehna."] },
+  { id:'asad', name:'Asad', role:'Analytics', color:'#3b82f6',
+    stats:{bat:75,bowl:85,field:75,speed:68,stam:80},
+    desc:'Dimagh se cricket khelta hai',
+    special:'Tactical Vision', signature:'Calculated Shot',
+    permission:["Abbu: Asad, padhai chhod ke cricket?","Asad: Abbu, game theory apply kar raha hun.","Ammi: Teri skills pe trust karte hain hum.","Abbu: Par yaad rakhna... Badshah se bach ke rehna."] },
+  { id:'chacha_rasheed', name:'Chacha Rasheed', role:'1992 Legend', color:'#c084fc',
+    stats:{bat:85,bowl:88,field:65,speed:55,stam:70},
+    desc:'1992 ka hero, aaj bhi champion',
+    special:'1992 Mode', signature:'The Legend Drive',
+    permission:["Bhai: Chacha, aap bhi khelenge?","Chacha: 1992 mein khelya tha, aaj bhi khelein ge!","Bhabi: Ghar pe dawa bhi lena yaad se.","Bhai: Aur Chacha ji... Badshah se bach ke rehna."] },
+  { id:'sana', name:'Sana', role:'Timing Master', color:'#f43f5e',
+    stats:{bat:92,bowl:70,field:80,speed:78,stam:82},
+    desc:'Perfect timing, koi nahi rok sakta',
+    special:'Perfect Timing', signature:'Silken Drive',
+    permission:["Ammi: Sana beta, cricket mein?","Sana: Ammi, timing master hun main.","Abu: Confidence achha hai, hosiyar rehna.","Ammi: Aur jaanu... Badshah se bach ke rehna."] },
+  { id:'rimsha', name:'Rimsha', role:'Mind Games', color:'#06b6d4',
+    stats:{bat:78,bowl:88,field:76,speed:74,stam:78},
+    desc:'Dimagh se khiladi, dil se cricketer',
+    special:'Mind Trick', signature:'Deceptive Spin',
+    permission:["Papa: Rimsha, yeh pagalpan kab khatam hogi?","Rimsha: Papa, psychology of cricket seekh rahi hun.","Mama: Teri dono skills pe naaz hai.","Papa: Lekin beta... Badshah se bach ke rehna."] },
+  { id:'zara', name:'Zara', role:'Aggressive Hitter', color:'#f97316',
+    stats:{bat:88,bowl:65,field:72,speed:80,stam:88},
+    desc:'Koi rukawat nahi, seedha maidan mein',
+    special:'Aggressive Mode', signature:'Power Drive',
+    permission:["Dadi: Zara, cricket sirf ladkon ka nahi?","Zara: Dadi, main sabko dikha dungi!","Abbu: Mujhe pata hai ye kar sakti hai.","Dadi: Toh ja beta... Badshah se bach ke rehna."] },
+  { id:'hira', name:'Hira', role:'Speed Conversion', color:'#10b981',
+    stats:{bat:82,bowl:72,field:88,speed:92,stam:86},
+    desc:'Ek se do, do se char, char se chha',
+    special:'Speed Convert', signature:'Lightning Single',
+    permission:["Bhai: Hira, teri training bahut achi hai.","Hira: Bhai, speed hi meri strength hai.","Ammi: Theek hai, par kha ke jana.","Bhai: Aur ek baat... Badshah se bach ke rehna."] },
+  { id:'amma_zubeda', name:'Amma Zubeda', role:'Unexpected Power', color:'#eab308',
+    stats:{bat:86,bowl:80,field:70,speed:65,stam:90},
+    desc:'Mohalle ki asli rani, unexpectedly lethal',
+    special:'Amma Power', signature:'The Surprise',
+    permission:["Neighbour: Amma Zubeda, cricket?","Amma: Beta, ye amma ne bahut cricket dekhi hai.","Neighbour: Par Amma ji...","Amma: Mujhe Badshah se nahi darna, par tum zaroor bach ke rehna!"] }
+];
+
+// ─── TOURNAMENT DATA ─────────────────────────────────────────────
+const MOHALLA_TEAMS = [
+  {name:'Gali Boys',color:'#e63946',wins:0,losses:0,skill:55},
+  {name:'Rooftop Kings',color:'#f97316',wins:0,losses:0,skill:60},
+  {name:'Bazaar Ballers',color:'#eab308',wins:0,losses:0,skill:65},
+  {name:'Mohalla Tigers',color:'#22c55e',wins:0,losses:0,skill:70},
+  {name:'Park Street XI',color:'#3b82f6',wins:0,losses:0,skill:72},
+  {name:'Player Team',color:'#FFD700',wins:0,losses:0,skill:80,isPlayer:true},
+];
+
+const VEHARI_TEAMS = [
+  {name:'Vehari Central Tigers',color:'#ff6b35',skill:75},
+  {name:'College Road Kings',color:'#a855f7',skill:78},
+  {name:'Satellite Strikers',color:'#06b6d4',skill:80},
+  {name:'Model Town Warriors',color:'#22c55e',skill:82},
+  {name:'City Lions',color:'#f43f5e',skill:85},
+  {name:'Vehari All Stars',color:'#eab308',skill:88},
+  {name:'LEGEND ALL-STARS',color:'#FFD700',skill:99,isFinal:true},
+  {name:'Player Team',color:'#FFD700',skill:80,isPlayer:true},
+];
+
+// ─── NPC DATA ────────────────────────────────────────────────────
+const NPCS = {
+  aunty_nasreen: {name:'Aunty Nasreen', lines:["Beta! Abhi khana khao!","Yahan cricket mat khelo, mere phool toot jaate hain!","Arre beta, ye toh mera beta bhi khelega na?"]},
+  chai_wala: {name:'Chai Wala Akbar', lines:["Chai peelo pehle, phir khelo!","Aaj ka match toh bahut exciting hai!","Mast shot tha bhai, ek cutting chai toh banti hai!"]},
+  constable: {name:'Constable Sahab', lines:["Ruko ruko! Permission hai kya?","Yahaan cricket allowed nahi!","Chalo chalo, thana aa jao sab!"]},
+  guddu: {name:'Toddler Guddu', lines:["Baaaaaall! BALL BALL BALL!","Mujhe bhi khelna hai!","Waaaaah!"]},
+  car_uncle: {name:'Car Owner Uncle', lines:["Meri gaadi!! Arey nooo!!","Iske baad koi yahan ball nahi phenke ga!","Bilkul nahi! Seedha repair ka bill!"]},
+};
+
+// ─── RANDOM EVENTS ───────────────────────────────────────────────
+const RANDOM_EVENTS = [
+  { id:'aunty', title:'Aunty Nasreen Arrives!', desc:'Aunty Nasreen ne match rokne ki koshish ki!',
+    npc:'aunty_nasreen', duration:4000, delay:2,
+    voiceLine:"Arey bhai log, thoda break lo, chai pi lo!", tone:'funny' },
+  { id:'dog', title:'Dog on Pitch!', desc:'Ek kutte ne pitch par dhaawa bol diya!',
+    npc:null, duration:3500, delay:3,
+    voiceLine:"Arre ek kutta aa gaya maidan mein! Match ruka!", tone:'funny' },
+  { id:'police', title:'Police Inspection!', desc:'Constable Sahab ne inspection shuru kar di!',
+    npc:'constable', duration:5000, delay:2,
+    voiceLine:"Constable Sahab aa gaye! Sab kuch theek hai!", tone:'dramatic' },
+  { id:'rain', title:'Rain Delay!', desc:'Baarish ne match rokka - 5 minute break!',
+    npc:null, duration:4000, delay:3,
+    voiceLine:"Baarish shuru ho gayi! Thodi der ke liye match ruka!", tone:'calm' },
+  { id:'power_cut', title:'Power Cut!', desc:'Mohalle mein bijli chali gayi!',
+    npc:null, duration:3000, delay:2,
+    voiceLine:"Bijli gayi! Par cricket toh dhoop mein hi hota hai!", tone:'funny' },
+  { id:'car', title:'Window Broken!', desc:'Ball se kisi ki car ki khidki toot gayi!',
+    npc:'car_uncle', duration:5000, delay:3,
+    voiceLine:"Arre bhai! Meri gaadi ki khidki toot gayi!", tone:'dramatic' },
+  { id:'guddu', title:'Toddler Guddu Chaos!', desc:'Guddu ne pitch par dhaawa bol diya!',
+    npc:'guddu', duration:3000, delay:2,
+    voiceLine:"Guddu bhai maidan mein aa gaye! Mujhe bhi khelna hai!", tone:'funny' },
+  { id:'chacha_story', title:'Chacha 1992 Story!', desc:'Chacha Rasheed ne 1992 ki kahani shuru kar di!',
+    npc:null, duration:5500, delay:3,
+    voiceLine:"1992 mein maine ek aisa shot maara tha jo aaj bhi log yaad karte hain...", tone:'dramatic' },
+];
+
+// ─── COMMENTARY ──────────────────────────────────────────────────
+const COMMENTARY = {
+  six: ["CHHA! Uss ne toh asman cheer diya!","SIX! Seedha char diwar ke paar!","MAIDAN SE BAHAR! Ye toh limit cross kar gayi!","BADSHAH NE MAAR DIYA! Ek dum six!","Arre waah! Isi shot ka intezaar tha!"],
+  four: ["CHAR! Boundary par pahuch gaya!","Chaar run! Fielder ne haath bhi nahi diya!","Beautiful shot! Straight to boundary!","FOUR! Tum toh champion ho bhai!"],
+  wicket: ["WICKET! Out ho gaya!","Aa gayi ball stumps mein! Khatam!","OUT! Game ne rung badla!","Wicket gira! Match interesting ho gaya!"],
+  dot: ["Dot ball. Pressure badh raha hai.","Koi run nahi. Defense achi hai.","Ball miss ho gayi. Agli bar theek karo.","Tight delivery! Batsman defend kar gaya."],
+  one: ["Single! Run chalti rahi.","Ek run liya, strike bhi badla.","Clever single! Good running."],
+  two: ["Do run! Good work!","Do run ki daud laga di!","Two runs! Ye toh achha tha!"],
+  three: ["Teen run! Mazedar daud!","TEEN! Kahan se takte ho bhai!"],
+  milestone50: ["FIFTY! Yaar kamaal kar diya!","Half Century! Badshah ki innings!","50 complete! Aage aur badho!"],
+  milestone100: ["SAUTAAAAA! CENTURY! LEGEND!","100 Runs! Mohalle ka BADSHAH!","Ek sao! Iss match ka masla hal ho gaya!"],
+  pressure: ["Pressure badh raha hai. Har ball matter karti hai.","Ye match ab exciting phase mein aa gaya!","Tight situation. Saanson mein aane laga hai!"],
+  collapse: ["Team grip kho rahi hai!","Ek ke baad ek wicket! Drama shuru!","Yaar kya collapse hai ye!"],
+  matchPressure: ["Final overs! Sab kuch abhi decide hoga!","Ab waqt hai Badshah banne ka!","Abhi nahi toh kabhi nahi!"]
+};
+
+const commentaryPool = (type) => {
+  const arr = COMMENTARY[type] || COMMENTARY.dot;
+  return arr[Math.floor(Math.random()*arr.length)];
+};
+
+// ─── COACH WASAY SYSTEM ──────────────────────────────────────────
+const CoachWasay = {
+  lines: {
+    wicket: ["Maine kaha tha...","Focus karo. Abhi bhi waqt hai.","Har wicket ek sabaq hai."],
+    six: ["WAHI TAQAT! Badshah mode on!","AB BAAT BAN GAYI!","Yahi chahiye tha mujhe!"],
+    dot_balls: ["Gap dhoondo yaar.","Defensive mat raho itna.","Timing pe dhyan do."],
+    pressure_chase: ["Ab Badshah banna padega.","Ek-ek run matter karta hai.","Calm raho. Trust karo apne aap pe."],
+    collapse: ["Ruko! Sochke khelo!","Defense first. Attack baad mein.","Bhaagna nahi, larna hai!"],
+    final_over: ["YE AAKHRI OVER HAI! JEET JAO!","Ab koi back nahi. Seedha maaro!","BADSHAH BANNA PADEGA AAKHIR!"],
+    good_start: ["Sahi direction mein ho.","Ye wali momentum pakad lo.","Zabardast shuruwaat!"],
+    default: ["Dhyan do, sab theek hoga.","Maidaan tumhara hai.","Khelao, daro mat!"],
+  },
+  currentLine: "Dhyan raho.",
+  visible: true,
+  animFrame: 0,
+
+  getLine(situation) {
+    const pool = this.lines[situation] || this.lines.default;
+    const line = pool[Math.floor(Math.random()*pool.length)];
+    this.currentLine = line;
+    G.coachMsg = line;
+    G.coachTimer = 3500;
+    return line;
+  },
+
+  render(x, y, w, h) {
+    this.animFrame += 0.04;
+    const breathe = Math.sin(this.animFrame)*2;
+    cx.save();
+    // Coach body
+    const bx = x + w/2, by = y + h*0.55 + breathe;
+    cx.fillStyle = '#1a1a1a';
+    cx.beginPath();
+    cx.roundRect(x+2, y+2, w-4, h-4, 10);
+    cx.fill();
+    cx.strokeStyle = '#FFD700';
+    cx.lineWidth = 2;
+    cx.beginPath();
+    cx.roundRect(x+2, y+2, w-4, h-4, 10);
+    cx.stroke();
+
+    // Head
+    cx.fillStyle = '#c68642';
+    cx.beginPath();
+    cx.arc(bx, by - h*0.25, h*0.14, 0, Math.PI*2);
+    cx.fill();
+    // Hat
+    cx.fillStyle = '#1a1a1a';
+    cx.fillRect(bx-h*0.1, by-h*0.41, h*0.2, h*0.06);
+    cx.fillRect(bx-h*0.07, by-h*0.45, h*0.14, h*0.07);
+    cx.fillStyle = '#FFD700';
+    cx.fillRect(bx-h*0.1, by-h*0.36, h*0.2, h*0.015);
+    // Body
+    cx.fillStyle = '#1e3a5f';
+    cx.beginPath();
+    cx.roundRect(bx-h*0.1, by-h*0.1, h*0.2, h*0.25, 4);
+    cx.fill();
+    // Whistle
+    cx.strokeStyle = '#FFD700'; cx.lineWidth = 1.5;
+    cx.beginPath();
+    cx.moveTo(bx, by+h*0.02); cx.lineTo(bx, by+h*0.12);
+    cx.stroke();
+    // Arms - wave
+    cx.strokeStyle = '#c68642'; cx.lineWidth = 3;
+    const waveA = Math.sin(this.animFrame * 2) * 0.3;
+    cx.beginPath();
+    cx.moveTo(bx-h*0.1, by-h*0.05);
+    cx.quadraticCurveTo(bx-h*0.22, by-h*0.02+waveA*h*0.1, bx-h*0.18, by+h*0.1);
+    cx.stroke();
+    cx.beginPath();
+    cx.moveTo(bx+h*0.1, by-h*0.05);
+    cx.quadraticCurveTo(bx+h*0.22, by-h*0.02-waveA*h*0.1, bx+h*0.18, by+h*0.1);
+    cx.stroke();
+    // Text WASAY
+    cx.font = `bold ${h*0.08}px Arial`;
+    cx.textAlign = 'center';
+    cx.fillStyle = '#FFD700';
+    cx.fillText('COACH', bx, y + h*0.1);
+    cx.font = `bold ${h*0.1}px Arial`;
+    cx.fillStyle = '#fff';
+    cx.fillText('WASAY', bx, y + h*0.2);
+
+    // Speech bubble
+    if (G.coachMsg && G.coachTimer > 0) {
+      const bubX = x - 10, bubY = y + 5;
+      const bubW = 180, bubH = 55;
+      cx.fillStyle = 'rgba(0,0,0,0.9)';
+      cx.beginPath();
+      cx.roundRect(bubX-bubW, bubY, bubW-10, bubH, 8);
+      cx.fill();
+      cx.strokeStyle = '#FFD700';
+      cx.lineWidth = 1.5;
+      cx.stroke();
+      // Tail
+      cx.fillStyle = 'rgba(0,0,0,0.9)';
+      cx.beginPath();
+      cx.moveTo(bubX-12, bubY+20);
+      cx.lineTo(bubX-2, bubY+10);
+      cx.lineTo(bubX-2, bubY+30);
+      cx.fill();
+
+      cx.font = `bold ${10}px Arial`;
+      cx.fillStyle = '#FFD700';
+      cx.textAlign = 'center';
+      const words = G.coachMsg.split(' ');
+      let line1='', line2='';
+      let w1 = 0;
+      words.forEach(word => {
+        if(cx.measureText(line1+' '+word).width < 155) line1 += (line1?' ':'')+word;
+        else line2 += (line2?' ':'')+word;
+      });
+      cx.fillText(line1, bubX - bubW/2 - 5, bubY + 22);
+      if(line2) cx.fillText(line2, bubX - bubW/2 - 5, bubY + 38);
+    }
+    cx.restore();
+  }
+};
+
+// ─── PARTICLE SYSTEM ─────────────────────────────────────────────
+const Particles = {
+  list: [],
+  spawn(x, y, color='#FFD700', count=20, spread=80, speed=3) {
+    for(let i=0;i<count;i++){
+      const angle = Math.random()*Math.PI*2;
+      const spd = 0.5 + Math.random()*speed;
+      this.list.push({
+        x, y, vx: Math.cos(angle)*spd, vy: Math.sin(angle)*spd - Math.random()*2,
+        life: 1, decay: 0.015+Math.random()*0.02,
+        size: 3+Math.random()*5, color,
+        gravity: 0.05+Math.random()*0.05
+      });
+    }
+  },
+  spawnGold(x, y, count=35) {
+    const colors = ['#FFD700','#FFF700','#FF9500','#FFB700','#ffffff'];
+    for(let i=0;i<count;i++){
+      const c = colors[Math.floor(Math.random()*colors.length)];
+      this.spawn(x, y, c, 1, 120, 4);
+    }
+  },
+  update(dt) {
+    this.list = this.list.filter(p => p.life > 0);
+    this.list.forEach(p => {
+      p.x += p.vx; p.y += p.vy;
+      p.vy += p.gravity;
+      p.life -= p.decay;
+    });
+  },
+  render() {
+    this.list.forEach(p => {
+      cx.save();
+      cx.globalAlpha = Math.max(0, p.life);
+      cx.fillStyle = p.color;
+      cx.beginPath();
+      cx.arc(p.x, p.y, p.size, 0, Math.PI*2);
+      cx.fill();
+      cx.restore();
+    });
+  }
+};
+
+// ─── MATCH LOGIC ─────────────────────────────────────────────────
+function createMatch(playerTeamName, oppTeamName, totalOvers, playerBatFirst) {
+  return {
+    playerTeamName, oppTeamName, totalOvers, playerBatFirst,
+    innings: [
+      {runs:0, wickets:0, overs:0, balls:0, history:[], extras:0},
+      {runs:0, wickets:0, overs:0, balls:0, history:[], extras:0}
+    ],
+    currentInnings: 0,
+    target: null,
+    phase: 'idle',
+    // batting ui
+    bat: {
+      meterAngle: 0,
+      meterSpeed: 2.2,
+      sweetAngle: Math.PI * 0.6,
+      sweetWidth: 0.55,
+      goodWidth: 1.4,
+      canSwing: false,
+      ballIncoming: false,
+      ballProgress: 0,
+      ballX: BASE_W/2, ballY: 200,
+      ballTargetX: BASE_W/2, ballTargetY: 490,
+      shotDir: 0,
+      deliveryType: 'Normal',
+      swingResult: null,
+      resultTimer: 0,
+      resultText: '',
+      resultColor: '#FFD700',
+      charged: false,
+      dotCount: 0,
+    },
+    // bowling ui
+    bowl: {
+      phase: 'select',
+      selectedType: 0,
+      aimX: BASE_W/2, aimY: 390,
+      deliveryProgress: 0,
+      aiDecision: null,
+      aiTimer: 0,
+    },
+    // fielding ui
+    field: {
+      active: false,
+      type: 'catch',
+      meterPos: 0.5,
+      meterDir: 1,
+      meterSpeed: 0.012,
+      timer: 120,
+      result: null,
+      ballX: BASE_W/2, ballY: 300,
+      ballTargetX: BASE_W/2, ballTargetY: 460,
+      progress: 0,
+    },
+    // commentary
+    lastComment: '',
+    commentTimer: 0,
+    dotBalls: 0,
+    lastRuns: 0,
+    totalBallsBowled: 0,
+  };
+}
+
+function currentInn(m) { return m.innings[m.currentInnings]; }
+
+function isPlayerBatting(m) {
+  const playerIsTeam0 = true; // player is always team index 0
+  if (m.playerBatFirst) return m.currentInnings === 0;
+  else return m.currentInnings === 1;
+}
+
+function nextBall(m) {
+  const inn = currentInn(m);
+  inn.balls++;
+  m.totalBallsBowled++;
+  if (inn.balls >= 6) {
+    inn.balls = 0;
+    inn.overs++;
+  }
+}
+
+function addRuns(m, runs) {
+  const inn = currentInn(m);
+  inn.runs += runs;
+  inn.history.push(runs === 0 ? '●' : String(runs));
+  if (runs === 0) { m.dotBalls++; m.bat.dotCount++; }
+  else { m.dotBalls = 0; m.bat.dotCount = 0; }
+}
+
+function addWicket(m) {
+  const inn = currentInn(m);
+  inn.wickets++;
+  inn.history.push('W');
+  m.dotBalls = 0;
+}
+
+function checkInningsEnd(m) {
+  const inn = currentInn(m);
+  if (inn.wickets >= 10 || inn.overs >= m.totalOvers) {
+    if (m.currentInnings === 0) {
+      m.target = inn.runs + 1;
+      m.currentInnings = 1;
+      // reset ball state
+      m.bat.meterAngle = 0;
+      m.bat.canSwing = false;
+      m.bat.ballIncoming = false;
+      m.bowl.phase = 'select';
+      m.phase = 'innings_break';
+      return 'innings_break';
+    } else {
+      m.phase = 'match_over';
+      return 'match_over';
+    }
+  }
+  return null;
+}
+
+function getMatchResult(m) {
+  const i1 = m.innings[0], i2 = m.innings[1];
+  const p1Runs = m.playerBatFirst ? i1.runs : i2.runs;
+  const p2Runs = m.playerBatFirst ? i2.runs : i1.runs;
+  if (p1Runs > p2Runs) return {winner:'player', margin: p1Runs - p2Runs, type:'runs'};
+  else if (p2Runs > p1Runs) return {winner:'opponent', margin: p2Runs - p1Runs, type:'runs'};
+  else return {winner:'tie', margin:0, type:'tie'};
+}
+
+// AI batting calculation
+function aiBatResult(m, deliveryType) {
+  const char = G.selectedChar;
+  const aiSkill = 65; // opponent AI batting skill
+  const rand = Math.random() * 100;
+  const deliveryBonus = {
+    'Yorker': -15, 'Bouncer': -10, 'Swing': -12,
+    'Spinner': -8, 'Googly': -20, 'Slower': -10, 'Normal': 0
+  }[deliveryType] || 0;
+  const eff = aiSkill + deliveryBonus;
+
+  if (rand < 10 + (100-eff)*0.15) return 'W'; // wicket
+  if (rand < 25) return '0';
+  if (rand < 50) return '1';
+  if (rand < 68) return '2';
+  if (rand < 80) return '3';
+  if (rand < 92) return '4';
+  return '6';
+}
+
+// Player batting calculation  
+function playerBatResult(timing, shotDir, char) {
+  const batStat = char ? char.stats.bat : 75;
+  const specialBoost = (char && char.special==='Perfect Timing' && timing==='PERFECT') ? 15 : 0;
+  const powerBoost = (char && char.special==='Power Surge') ? 10 : 0;
+  const base = batStat + specialBoost + powerBoost;
+
+  if (timing === 'PERFECT') {
+    const r = Math.random()*100;
+    if (r < 25 + base*0.15) return 6;
+    if (r < 60) return 4;
+    if (r < 80) return 3;
+    return 2;
+  } else if (timing === 'GOOD') {
+    const r = Math.random()*100;
+    if (r < 8 + base*0.05) return 6;
+    if (r < 30) return 4;
+    if (r < 55) return 3;
+    if (r < 75) return 2;
+    if (r < 90) return 1;
+    return 0;
+  } else if (timing === 'OKAY') {
+    const r = Math.random()*100;
+    if (r < 5) return 4;
+    if (r < 20) return 2;
+    if (r < 50) return 1;
+    if (r < 75) return 0;
+    return 'W'; // edge
+  } else { // MISS
+    const r = Math.random()*100;
+    if (r < 55) return 'W'; // bowled/caught
+    if (r < 80) return 0;
+    return 1; // edge for runs
+  }
+}
+
+// ─── BATTING TIMING CALCULATION ──────────────────────────────────
+function calcTiming(bat) {
+  const angle = bat.meterAngle % (Math.PI * 2);
+  const sweet = bat.sweetAngle;
+  let diff = Math.abs(angle - sweet);
+  if (diff > Math.PI) diff = Math.PI * 2 - diff;
+  if (diff < bat.sweetWidth/2) return 'PERFECT';
+  if (diff < bat.goodWidth/2) return 'GOOD';
+  if (diff < bat.goodWidth*0.85) return 'OKAY';
+  return 'MISS';
+}
+
+// ─── BOWLING ACCURACY CALCULATION ────────────────────────────────
+function calcBowlingAccuracy(bowl) {
+  // Aim center of pitch is ~BASE_W/2, ~390
+  const pitchCX = BASE_W/2, pitchCY = 390;
+  const dx = bowl.aimX - pitchCX, dy = bowl.aimY - pitchCY;
+  const dist = Math.sqrt(dx*dx+dy*dy);
+  if (dist < 30) return 'PERFECT';
+  if (dist < 70) return 'GOOD';
+  if (dist < 120) return 'OKAY';
+  return 'WIDE';
+}
+
+// ─── FIELD RENDERER ──────────────────────────────────────────────
+function drawField(alpha=1) {
+  cx.save();
+  cx.globalAlpha = alpha;
+  const fw = BASE_W * 0.68, fh = BASE_H * 0.88;
+  const fcx = BASE_W * 0.38, fcy = BASE_H / 2;
+
+  // Outfield
+  const grd = cx.createRadialGradient(fcx, fcy, 50, fcx, fcy, Math.max(fw,fh)*0.52);
+  grd.addColorStop(0, '#2d7a2d');
+  grd.addColorStop(0.7, '#1e6018');
+  grd.addColorStop(1, '#143c0e');
+  cx.fillStyle = grd;
+  cx.beginPath();
+  cx.ellipse(fcx, fcy, fw/2, fh/2, 0, 0, Math.PI*2);
+  cx.fill();
+
+  // Mowing stripes
+  for (let i = 0; i < 8; i++) {
+    const x0 = fcx - fw/2 + i*(fw/8);
+    cx.fillStyle = i%2===0 ? 'rgba(0,0,0,0.07)' : 'rgba(255,255,255,0.04)';
+    cx.fillRect(x0, fcy - fh/2, fw/8, fh);
+  }
+
+  // Boundary line
+  cx.strokeStyle = 'rgba(255,255,255,0.85)';
+  cx.lineWidth = 2.5;
+  cx.setLineDash([12,6]);
+  cx.beginPath();
+  cx.ellipse(fcx, fcy, fw/2-12, fh/2-12, 0, 0, Math.PI*2);
+  cx.stroke();
+  cx.setLineDash([]);
+
+  // 30-yard circle
+  cx.strokeStyle = 'rgba(255,255,255,0.25)';
+  cx.lineWidth = 1.5;
+  cx.setLineDash([8,8]);
+  cx.beginPath();
+  cx.ellipse(fcx, fcy, fw*0.28, fh*0.32, 0, 0, Math.PI*2);
+  cx.stroke();
+  cx.setLineDash([]);
+
+  // Pitch
+  const pitchW = 48, pitchH = 200;
+  const px = fcx - pitchW/2, py = fcy - pitchH/2;
+  const pitchGrd = cx.createLinearGradient(px, py, px+pitchW, py+pitchH);
+  pitchGrd.addColorStop(0, '#c8a450');
+  pitchGrd.addColorStop(0.5, '#d4b165');
+  pitchGrd.addColorStop(1, '#c8a450');
+  cx.fillStyle = pitchGrd;
+  cx.fillRect(px, py, pitchW, pitchH);
+
+  // Pitch markings
+  cx.strokeStyle = 'rgba(255,255,255,0.8)'; cx.lineWidth = 1.5;
+  // Crease lines
+  cx.beginPath();
+  cx.moveTo(px - 20, py + 22); cx.lineTo(px + pitchW + 20, py + 22);
+  cx.moveTo(px - 20, py + pitchH - 22); cx.lineTo(px + pitchW + 20, py + pitchH - 22);
+  cx.moveTo(px - 20, py + 28); cx.lineTo(px + pitchW + 20, py + 28);
+  cx.moveTo(px - 20, py + pitchH - 28); cx.lineTo(px + pitchW + 20, py + pitchH - 28);
+  cx.stroke();
+  // Bowling crease
+  cx.strokeStyle = 'rgba(255,255,255,0.6)';
+  cx.beginPath();
+  cx.moveTo(px, py + 18); cx.lineTo(px+pitchW, py + 18);
+  cx.moveTo(px, py + pitchH - 18); cx.lineTo(px+pitchW, py + pitchH - 18);
+  cx.stroke();
+
+  // Draw stumps
+  drawStumps(fcx, fcy + pitchH/2 - 22, pitchW); // batter end
+  drawStumps(fcx, fcy - pitchH/2 + 22, pitchW); // bowler end
+
+  cx.restore();
+  return {fcx, fcy, fw, fh, pitchW, pitchH, px, py};
+}
+
+function drawStumps(x, y, pitchW) {
+  const stumpPositions = [-8, 0, 8];
+  const stumpH = 28, stumpW = 4;
+  cx.fillStyle = '#F5E6C8';
+  stumpPositions.forEach(ox => {
+    cx.fillRect(x + ox - stumpW/2, y - stumpH, stumpW, stumpH);
+  });
+  // Bails
+  cx.fillStyle = '#FFD700';
+  cx.fillRect(x - 12, y - stumpH, 24, 3);
+  cx.fillRect(x - 4, y - stumpH - 2, 8, 2);
+}
+
+function drawFielders(m) {
+  const {fcx, fcy, fw, fh} = drawField_info();
+  const positions = [
+    [fcx, fcy - fh*0.36],       // slip
+    [fcx + fw*0.22, fcy - fh*0.22], // gully
+    [fcx - fw*0.35, fcy],        // mid-on
+    [fcx + fw*0.35, fcy],        // mid-off
+    [fcx - fw*0.18, fcy + fh*0.32], // square leg
+    [fcx + fw*0.18, fcy + fh*0.32], // point
+    [fcx, fcy + fh*0.38],        // long-on
+    [fcx - fw*0.3, fcy - fh*0.12], // fine leg
+    [fcx + fw*0.28, fcy - fh*0.12], // third man
+  ];
+  const colors = ['#e63946','#f97316','#eab308','#22c55e','#3b82f6','#a855f7','#ec4899','#06b6d4','#10b981'];
+  positions.forEach((pos, i) => {
+    cx.save();
+    cx.fillStyle = colors[i % colors.length];
+    cx.beginPath();
+    cx.arc(pos[0], pos[1], 8, 0, Math.PI*2);
+    cx.fill();
+    cx.strokeStyle = '#fff'; cx.lineWidth = 1.5;
+    cx.stroke();
+    // Tiny player
+    cx.fillStyle = '#c68642';
+    cx.beginPath();
+    cx.arc(pos[0], pos[1]-11, 5, 0, Math.PI*2);
+    cx.fill();
+    cx.restore();
+  });
+}
+
+let _drawFieldInfoCache = null;
+function drawField_info() {
+  const fw = BASE_W * 0.68, fh = BASE_H * 0.88;
+  const fcx = BASE_W * 0.38, fcy = BASE_H / 2;
+  return {fcx, fcy, fw, fh};
+}
+
+function drawBatsman(x, y, color, swingAnim=0) {
+  cx.save();
+  cx.fillStyle = color || '#e63946';
+  // Body
+  cx.beginPath();
+  cx.roundRect(x-10, y-30, 20, 35, 4);
+  cx.fill();
+  // Head
+  cx.fillStyle = '#c68642';
+  cx.beginPath(); cx.arc(x, y-38, 10, 0, Math.PI*2); cx.fill();
+  // Helmet
+  cx.fillStyle = '#222';
+  cx.beginPath(); cx.arc(x, y-40, 10, Math.PI, 0); cx.fill();
+  cx.fillStyle = '#444';
+  cx.fillRect(x-10, y-42, 20, 4);
+  // Bat - swing animation
+  const batAngle = -Math.PI*0.15 + swingAnim * Math.PI * 0.6;
+  cx.strokeStyle = '#8B4513'; cx.lineWidth = 5;
+  cx.lineCap = 'round';
+  cx.beginPath();
+  cx.moveTo(x+8, y-15);
+  cx.lineTo(x+8 + Math.cos(batAngle)*32, y-15 + Math.sin(batAngle)*32);
+  cx.stroke();
+  cx.strokeStyle = '#FFD700'; cx.lineWidth = 3;
+  cx.beginPath();
+  cx.moveTo(x+8 + Math.cos(batAngle)*24, y-15 + Math.sin(batAngle)*24);
+  cx.lineTo(x+8 + Math.cos(batAngle)*32, y-15 + Math.sin(batAngle)*32);
+  cx.stroke();
+  // Pad
+  cx.fillStyle = '#f0f0f0';
+  cx.fillRect(x-10, y+0, 8, 18); cx.fillRect(x+2, y+0, 8, 18);
+  cx.restore();
+}
+
+function drawBowler(x, y, color, runAngle=0) {
+  cx.save();
+  cx.fillStyle = color || '#3b82f6';
+  const legSwing = Math.sin(runAngle) * 20;
+  // Legs
+  cx.strokeStyle = '#333'; cx.lineWidth = 5;
+  cx.beginPath();
+  cx.moveTo(x, y+5); cx.lineTo(x-8, y+30+legSwing);
+  cx.moveTo(x, y+5); cx.lineTo(x+8, y+30-legSwing);
+  cx.stroke();
+  // Body
+  cx.fillStyle = color;
+  cx.beginPath(); cx.roundRect(x-11, y-20, 22, 28, 4); cx.fill();
+  // Head
+  cx.fillStyle = '#c68642';
+  cx.beginPath(); cx.arc(x, y-28, 10, 0, Math.PI*2); cx.fill();
+  cx.fillStyle = '#222';
+  cx.beginPath(); cx.arc(x, y-30, 10, Math.PI, 0); cx.fill();
+  // Bowling arm
+  const armAngle = -Math.PI*0.8 + Math.sin(runAngle*0.5)*0.4;
+  cx.strokeStyle = '#c68642'; cx.lineWidth = 4;
+  cx.beginPath();
+  cx.moveTo(x+8, y-10);
+  cx.lineTo(x+8+Math.cos(armAngle)*28, y-10+Math.sin(armAngle)*28);
+  cx.stroke();
+  cx.restore();
+}
+
+function drawBall(x, y, size=10, glowing=false) {
+  cx.save();
+  if (glowing) { cx.shadowColor = '#FF0000'; cx.shadowBlur = 20; }
+  cx.fillStyle = '#c0392b';
+  cx.beginPath(); cx.arc(x, y, size, 0, Math.PI*2); cx.fill();
+  cx.strokeStyle = '#922B21'; cx.lineWidth = 1.5;
+  cx.stroke();
+  // Seam
+  cx.strokeStyle = '#fff'; cx.lineWidth = 1;
+  cx.beginPath();
+  cx.arc(x, y, size*0.7, -0.5, 0.5); cx.stroke();
+  cx.beginPath();
+  cx.arc(x, y, size*0.7, Math.PI-0.5, Math.PI+0.5); cx.stroke();
+  cx.restore();
+}
+
+// ─── SCOREBOARD ───────────────────────────────────────────────────
+function drawScoreboard(m, x, y, w, h) {
+  cx.save();
+  // Panel background
+  const grd = cx.createLinearGradient(x, y, x, y+h);
+  grd.addColorStop(0, '#0a0a1e');
+  grd.addColorStop(1, '#050510');
+  cx.fillStyle = grd;
+  cx.beginPath(); cx.roundRect(x, y, w, h, 12); cx.fill();
+  cx.strokeStyle = '#FFD700'; cx.lineWidth = 2;
+  cx.beginPath(); cx.roundRect(x, y, w, h, 12); cx.stroke();
+
+  const inn = currentInn(m);
+  const padX = x + 14, tw = w - 28;
+  let oy = y + 18;
+
+  // Logo / Title
+  LogoSystem.draw(x+w/2, oy+12, w*0.4, 0.9, 6);
+  oy += 40;
+
+  // Team names
+  cx.font = 'bold 11px Arial';
+  cx.textAlign = 'center';
+  cx.fillStyle = '#FFD700';
+  cx.fillText('━━━━━━━━━━━━━━━━━', x+w/2, oy); oy += 14;
+  cx.font = 'bold 12px Arial';
+  cx.fillStyle = '#fff';
+  cx.fillText(`${m.playerTeamName}`, x+w/2, oy); oy += 14;
+  cx.fillStyle = '#aaa';
+  cx.font = '11px Arial';
+  cx.fillText('vs', x+w/2, oy); oy += 12;
+  cx.fillStyle = '#fff';
+  cx.font = 'bold 12px Arial';
+  cx.fillText(`${m.oppTeamName}`, x+w/2, oy); oy += 18;
+
+  // Score
+  cx.strokeStyle = '#FFD70060'; cx.lineWidth = 1;
+  cx.beginPath(); cx.moveTo(padX, oy); cx.lineTo(padX+tw, oy); cx.stroke();
+  oy += 12;
+
+  const bigScore = `${inn.runs} / ${inn.wickets}`;
+  cx.font = 'bold 32px Arial';
+  cx.textAlign = 'center';
+  cx.fillStyle = '#FFD700';
+  cx.shadowColor = '#FFD700'; cx.shadowBlur = 10;
+  cx.fillText(bigScore, x+w/2, oy+22);
+  cx.shadowBlur = 0;
+  oy += 38;
+
+  // Overs
+  const oversStr = `${inn.overs}.${inn.balls} / ${m.totalOvers}.0`;
+  cx.font = '14px Arial';
+  cx.fillStyle = '#ccc';
+  cx.fillText(`Overs: ${oversStr}`, x+w/2, oy); oy += 18;
+
+  // Run rates
+  const ballsBowled = inn.overs*6 + inn.balls;
+  const crr = ballsBowled > 0 ? ((inn.runs/ballsBowled)*6).toFixed(2) : '0.00';
+  cx.font = '12px Arial';
+  cx.fillStyle = '#aaa';
+  cx.fillText(`CRR: ${crr}`, x+w/2, oy); oy += 16;
+
+  if (m.currentInnings === 1 && m.target !== null) {
+    const remain = m.target - inn.runs;
+    const ballsLeft = (m.totalOvers * 6) - ballsBowled;
+    const rrr = ballsLeft > 0 ? ((remain/ballsLeft)*6).toFixed(2) : '∞';
+    cx.fillStyle = remain > 0 ? '#ff9966' : '#66ff66';
+    cx.font = 'bold 12px Arial';
+    cx.fillText(`Need: ${remain} off ${ballsLeft} balls`, x+w/2, oy); oy += 16;
+    cx.fillStyle = '#ff9966';
+    cx.fillText(`RRR: ${rrr}`, x+w/2, oy); oy += 16;
+    cx.fillStyle = '#aaa'; cx.font = '11px Arial';
+    cx.fillText(`Target: ${m.target}`, x+w/2, oy); oy += 14;
+  }
+
+  // Innings indicator
+  cx.font = 'bold 11px Arial';
+  cx.fillStyle = '#FFD700';
+  cx.fillText(`${m.currentInnings+1}${m.currentInnings===0?'st':'nd'} Innings`, x+w/2, oy); oy += 18;
+
+  cx.strokeStyle = '#FFD70060'; cx.lineWidth = 1;
+  cx.beginPath(); cx.moveTo(padX, oy); cx.lineTo(padX+tw, oy); cx.stroke();
+  oy += 10;
+
+  // Ball history strip
+  cx.font = 'bold 11px Arial';
+  cx.fillStyle = '#aaa';
+  cx.textAlign = 'center';
+  cx.fillText('This Over', x+w/2, oy); oy += 14;
+
+  const history = inn.history.slice(-24);
+  const cellW = Math.min(24, (tw-4)/Math.max(history.length,6));
+  const row1 = history.slice(-12, -6);
+  const row2 = history.slice(-6);
+  [row1, row2].forEach((row, ri) => {
+    row.forEach((b, i) => {
+      const bx = x + 8 + i * (tw/6+1) + (tw/6-cellW)/2;
+      const by = oy + ri*26;
+      let bgColor = '#222', textColor = '#fff';
+      if (b==='W') { bgColor='#c0392b'; textColor='#fff'; }
+      else if (b==='4') { bgColor='#1a5276'; textColor='#3498db'; }
+      else if (b==='6') { bgColor='#145a32'; textColor='#2ecc71'; }
+      else if (b==='●') { bgColor='#333'; textColor='#888'; }
+      cx.fillStyle = bgColor;
+      cx.beginPath(); cx.roundRect(bx, by, cellW, 20, 4); cx.fill();
+      cx.font = `bold ${b==='W'?11:12}px Arial`;
+      cx.fillStyle = textColor;
+      cx.textAlign = 'center';
+      cx.fillText(b, bx+cellW/2, by+14);
+    });
+  });
+  oy += 60;
+
+  // Previous innings (if 2nd innings)
+  if (m.currentInnings === 1) {
+    cx.strokeStyle = '#FFD70060'; cx.lineWidth = 1;
+    cx.beginPath(); cx.moveTo(padX, oy); cx.lineTo(padX+tw, oy); cx.stroke();
+    oy += 10;
+    cx.font = '11px Arial';
+    cx.fillStyle = '#888';
+    cx.textAlign = 'center';
+    const i1 = m.innings[0];
+    cx.fillText(`1st Innings: ${i1.runs}/${i1.wickets}`, x+w/2, oy);
+  }
+
+  cx.restore();
+}
+
+// ─── BUTTON SYSTEM ───────────────────────────────────────────────
+function makeBtn(label, x, y, w, h, action, color='#FFD700', textColor='#000', tag='') {
+  return {label,x,y,w,h,action,color,textColor,tag,hover:false,active:false};
+}
+
+function renderBtn(b) {
+  cx.save();
+  const isHover = b.hover;
+  const scale = isHover ? 1.04 : 1;
+  const bx = b.x + b.w/2, by = b.y + b.h/2;
+  cx.translate(bx, by);
+  cx.scale(scale, scale);
+  cx.translate(-bx, -by);
+  // Shadow
+  if (isHover) { cx.shadowColor = b.color; cx.shadowBlur = 20; }
+  // Background
+  const grd = cx.createLinearGradient(b.x, b.y, b.x, b.y+b.h);
+  const c = b.color;
+  grd.addColorStop(0, isHover ? lighten(c, 30) : lighten(c, 10));
+  grd.addColorStop(1, isHover ? c : darken(c, 20));
+  cx.fillStyle = grd;
+  cx.beginPath(); cx.roundRect(b.x, b.y, b.w, b.h, b.h/2); cx.fill();
+  // Border
+  cx.strokeStyle = isHover ? '#fff' : 'rgba(255,255,255,0.3)';
+  cx.lineWidth = 1.5;
+  cx.stroke();
+  // Text
+  cx.font = `bold ${Math.max(11, b.h*0.36)}px 'Arial Black',Arial`;
+  cx.textAlign = 'center';
+  cx.textBaseline = 'middle';
+  cx.fillStyle = b.textColor;
+  cx.fillText(b.label, b.x+b.w/2, b.y+b.h/2);
+  cx.restore();
+}
+
+function expandHex(hex) {
+  if (!hex || !hex.startsWith('#')) return '#888888';
+  if (hex.length === 4) return `#${hex[1]}${hex[1]}${hex[2]}${hex[2]}${hex[3]}${hex[3]}`;
+  if (hex.length === 7) return hex;
+  return '#888888';
+}
+function lighten(hex, amount) {
+  hex = expandHex(hex);
+  const r = Math.min(255, parseInt(hex.slice(1,3),16)+amount);
+  const g = Math.min(255, parseInt(hex.slice(3,5),16)+amount);
+  const b = Math.min(255, parseInt(hex.slice(5,7),16)+amount);
+  return `rgb(${r|0},${g|0},${b|0})`;
+}
+function darken(hex, amount) {
+  hex = expandHex(hex);
+  const r = Math.max(0, parseInt(hex.slice(1,3),16)-amount);
+  const g = Math.max(0, parseInt(hex.slice(3,5),16)-amount);
+  const b = Math.max(0, parseInt(hex.slice(5,7),16)-amount);
+  return `rgb(${r|0},${g|0},${b|0})`;
+}
+
+function checkBtns() {
+  G.buttons.forEach((b, i) => {
+    const mx = G.mouse.x, my = G.mouse.y;
+    b.hover = mx>b.x && mx<b.x+b.w && my>b.y && my<b.y+b.h;
+    if (b.hover && G.mouse.clicked) {
+      Audio.resume();
+      Audio.click();
+      b.action && b.action();
+    }
+  });
+}
+
+// ─── HOME PARTICLES ──────────────────────────────────────────────
+function initHomeParticles() {
+  G.homeParticles = [];
+  for (let i=0;i<80;i++) {
+    G.homeParticles.push({
+      x: Math.random()*BASE_W,
+      y: Math.random()*BASE_H,
+      vx: (Math.random()-0.5)*0.4,
+      vy: -0.2 - Math.random()*0.6,
+      size: 1+Math.random()*3,
+      alpha: Math.random()*0.7+0.1,
+      color: Math.random()>0.5 ? '#FFD700' : Math.random()>0.5 ? '#fff' : '#C8A400',
+      twinkle: Math.random()*Math.PI*2,
+    });
+  }
+}
+
+function updateHomeParticles() {
+  G.homeParticles.forEach(p => {
+    p.x += p.vx; p.y += p.vy;
+    p.twinkle += 0.05;
+    if (p.y < -5) { p.y = BASE_H+5; p.x = Math.random()*BASE_W; }
+    if (p.x < -5) p.x = BASE_W+5;
+    if (p.x > BASE_W+5) p.x = -5;
+  });
+}
+
+function drawHomeParticles() {
+  G.homeParticles.forEach(p => {
+    const alpha = p.alpha * (0.6+0.4*Math.sin(p.twinkle));
+    cx.save();
+    cx.globalAlpha = Math.max(0,alpha);
+    cx.fillStyle = p.color;
+    cx.shadowColor = p.color; cx.shadowBlur = p.size*2;
+    cx.beginPath();
+    cx.arc(p.x, p.y, p.size, 0, Math.PI*2);
+    cx.fill();
+    cx.restore();
+  });
+}
+
+// ─── TOURNAMENT SYSTEM ───────────────────────────────────────────
+function initTournament(mode) {
+  G.matchMode = mode;
+  const teams = mode === 'vehari' ? [...VEHARI_TEAMS] : [...MOHALLA_TEAMS];
+  G.tournamentData = {
+    mode, teams,
+    matches: [],
+    currentMatch: 0,
+    playerTeamIdx: teams.findIndex(t=>t.isPlayer),
+    schedule: [],
+    playerWins: 0, playerLosses: 0,
+  };
+  // Build schedule (player faces each other team)
+  const playerTeam = teams.find(t=>t.isPlayer);
+  const opponents = teams.filter(t=>!t.isPlayer);
+  G.tournamentData.schedule = opponents.map((opp, i) => ({
+    opponent: opp, matchNum: i+1, played: false, result: null
+  }));
+  G.tournamentData.currentMatchIdx = 0;
+}
+
+function getNextOpponent() {
+  const td = G.tournamentData;
+  if (!td) return null;
+  const pending = td.schedule.filter(m=>!m.played);
+  return pending.length > 0 ? pending[0] : null;
+}
+
+// ─── BATTING UI RENDERER ─────────────────────────────────────────
+function drawBattingUI(m) {
+  const bat = m.bat;
+  const {fcx, fcy, fw, fh} = drawField_info();
+
+  // Batsman position
+  const batsmanX = fcx, batsmanY = fcy + 62;
+  const bowlerX = fcx, bowlerY = fcy - 85;
+
+  // Draw bowler running
+  const bowlerRunAngle = G.t * 0.005;
+  if (!bat.ballIncoming) {
+    drawBowler(bowlerX, bowlerY - 20, '#3b82f6', bowlerRunAngle);
+  }
+
+  // Draw batsman
+  const swingAnim = bat.swingResult ? Math.min(1, (1000-bat.resultTimer)/400) : 0;
+  drawBatsman(batsmanX, batsmanY, G.selectedChar ? G.selectedChar.color : '#e63946', swingAnim);
+
+  // Ball animation
+  if (bat.ballIncoming) {
+    const t = bat.ballProgress;
+    const ballX = bat.ballX + (bat.ballTargetX - bat.ballX) * t;
+    const ballY = bat.ballY + (bat.ballTargetY - bat.ballY) * t - Math.sin(t*Math.PI)*30;
+    drawBall(ballX, ballY, 10, true);
+  }
+
+  // Timing meter ring
+  if (bat.canSwing && !bat.swingResult) {
+    const rx = batsmanX, ry = batsmanY - 30;
+    const ringR = 62;
+
+    // Track
+    cx.beginPath();
+    cx.arc(rx, ry, ringR, 0, Math.PI*2);
+    cx.strokeStyle = 'rgba(255,255,255,0.15)';
+    cx.lineWidth = 14;
+    cx.stroke();
+
+    // Good zone (green)
+    cx.beginPath();
+    cx.arc(rx, ry, ringR, bat.sweetAngle - bat.goodWidth/2, bat.sweetAngle + bat.goodWidth/2);
+    cx.strokeStyle = '#22c55e';
+    cx.lineWidth = 14;
+    cx.stroke();
+
+    // Sweet spot (gold)
+    cx.beginPath();
+    cx.arc(rx, ry, ringR, bat.sweetAngle - bat.sweetWidth/2, bat.sweetAngle + bat.sweetWidth/2);
+    cx.strokeStyle = '#FFD700';
+    cx.lineWidth = 14;
+    cx.stroke();
+
+    // Glow
+    cx.shadowColor = '#FFD700'; cx.shadowBlur = 15;
+    cx.beginPath();
+    cx.arc(rx, ry, ringR, bat.sweetAngle - bat.sweetWidth/2, bat.sweetAngle + bat.sweetWidth/2);
+    cx.strokeStyle = '#FFD700';
+    cx.lineWidth = 6;
+    cx.stroke();
+    cx.shadowBlur = 0;
+
+    // Needle
+    const nx = rx + Math.cos(bat.meterAngle) * ringR;
+    const ny = ry + Math.sin(bat.meterAngle) * ringR;
+    cx.fillStyle = '#fff';
+    cx.strokeStyle = '#fff';
+    cx.shadowColor = '#fff'; cx.shadowBlur = 8;
+    cx.beginPath(); cx.arc(nx, ny, 7, 0, Math.PI*2); cx.fill();
+    cx.shadowBlur = 0;
+    cx.strokeStyle = 'rgba(255,255,255,0.4)'; cx.lineWidth = 2;
+    cx.beginPath(); cx.moveTo(rx,ry); cx.lineTo(nx,ny); cx.stroke();
+
+    // SPACE hint
+    cx.font = 'bold 15px Arial';
+    cx.textAlign = 'center';
+    cx.fillStyle = `rgba(255,255,255,${0.5+0.5*Math.sin(G.t*0.008)})`;
+    cx.fillText('PRESS SPACE TO HIT', rx, ry + ringR + 24);
+
+    // Shot direction
+    const shotLabels = ['Drive','Pull','Cut','Sweep','Flick','Glance'];
+    cx.font = '11px Arial';
+    cx.fillStyle = '#aaa';
+    cx.fillText(`Shot: ${shotLabels[bat.shotDir]} [Q/E]`, rx, ry + ringR + 40);
+  }
+
+  // Result text
+  if (bat.swingResult && bat.resultTimer > 0) {
+    const alpha = Math.min(1, bat.resultTimer/300);
+    cx.save();
+    cx.globalAlpha = alpha;
+    cx.font = 'bold 42px Arial Black';
+    cx.textAlign = 'center';
+    cx.fillStyle = bat.resultColor;
+    cx.shadowColor = bat.resultColor;
+    cx.shadowBlur = 30;
+    cx.fillText(bat.resultText, batsmanX, batsmanY - 80);
+    cx.restore();
+  }
+
+  // Delivery type label
+  if (!bat.canSwing && !bat.ballIncoming) {
+    cx.font = '13px Arial';
+    cx.textAlign = 'center';
+    cx.fillStyle = '#FFD700';
+    cx.fillText(`Incoming: ${bat.deliveryType}`, batsmanX, batsmanY + 55);
+  }
+}
+
+// ─── BOWLING UI RENDERER ─────────────────────────────────────────
+function drawBowlingUI(m) {
+  const bowl = m.bowl;
+  const {fcx, fcy, fw, fh, pitchW, pitchH, px, py} = {
+    ...drawField_info(),
+    pitchW:48, pitchH:200,
+    px: BASE_W*0.38-24, py: BASE_H/2-100
+  };
+
+  const batsmanX = fcx, batsmanY = fcy + 62;
+  const bowlerX = fcx, bowlerY = fcy - 85;
+
+  // Draw AI batsman
+  drawBatsman(batsmanX, batsmanY, '#e63946', 0);
+
+  // Player bowler
+  if (bowl.phase !== 'delivering') {
+    const bowlerRunAngle = bowl.phase === 'aim' ? G.t*0.01 : 0;
+    drawBowler(bowlerX, bowlerY - 30, G.selectedChar ? G.selectedChar.color : '#3b82f6', bowlerRunAngle);
+  }
+
+  // Delivery type selector
+  if (bowl.phase === 'select') {
+    const types = ['Yorker','Bouncer','Swing','Spinner','Googly','Slower'];
+    const btnW = 150, btnH = 36, gap = 10;
+    const totalW = 3*(btnW+gap)-gap;
+    const startX = BASE_W/2 - totalW/2;
+    const startY = BASE_H - 160;
+
+    cx.fillStyle = 'rgba(0,0,0,0.85)';
+    cx.beginPath();
+    cx.roundRect(startX-18, startY-18, totalW+36, 2*(btnH+gap)+36+20, 16);
+    cx.fill();
+    cx.strokeStyle = '#FFD700'; cx.lineWidth = 2;
+    cx.stroke();
+
+    cx.font = 'bold 14px Arial';
+    cx.textAlign = 'center';
+    cx.fillStyle = '#FFD700';
+    cx.fillText('SELECT DELIVERY TYPE', BASE_W/2, startY-2);
+
+    const deliveryColors = ['#e63946','#f97316','#3b82f6','#22c55e','#a855f7','#eab308'];
+    types.forEach((t, i) => {
+      const col = i % 3, row = Math.floor(i/3);
+      const bx = startX + col*(btnW+gap);
+      const by = startY + 10 + row*(btnH+gap);
+      const isHov = G.mouse.x>bx && G.mouse.x<bx+btnW && G.mouse.y>by && G.mouse.y<by+btnH;
+      const isSel = bowl.selectedType === i;
+      cx.fillStyle = isSel || isHov ? deliveryColors[i] : 'rgba(40,40,40,0.9)';
+      cx.beginPath(); cx.roundRect(bx, by, btnW, btnH, 8); cx.fill();
+      cx.strokeStyle = isSel ? '#fff' : deliveryColors[i];
+      cx.lineWidth = isSel ? 2 : 1;
+      cx.stroke();
+      cx.font = `bold 13px Arial`;
+      cx.textAlign = 'center';
+      cx.fillStyle = '#fff';
+      cx.fillText(`${i+1}. ${t}`, bx+btnW/2, by+23);
+
+      if (G.mouse.clicked && isHov) {
+        bowl.selectedType = i;
+        bowl.phase = 'aim';
+        bowl.aimX = BASE_W/2;
+        bowl.aimY = BASE_H/2 - 20;
+        Audio.click();
+      }
+    });
+  }
+
+  // Aim phase
+  if (bowl.phase === 'aim') {
+    const pitchCenterX = BASE_W * 0.38, pitchCenterY = BASE_H/2;
+
+    // Pitch highlight
+    cx.fillStyle = 'rgba(255,215,0,0.1)';
+    cx.fillRect(pitchCenterX - 30, pitchCenterY - 115, 60, 230);
+
+    // Aim zones
+    const zones = [
+      {label:'Yorker Zone', y: pitchCenterY+70, color:'rgba(231,76,60,0.3)'},
+      {label:'Good Length', y: pitchCenterY+20, color:'rgba(52,152,219,0.3)'},
+      {label:'Short Pitch', y: pitchCenterY-30, color:'rgba(230,126,34,0.3)'},
+    ];
+    zones.forEach(z => {
+      cx.fillStyle = z.color;
+      cx.fillRect(pitchCenterX-30, z.y-15, 60, 30);
+      cx.font = '9px Arial';
+      cx.fillStyle = '#fff';
+      cx.textAlign = 'right';
+      cx.fillText(z.label, pitchCenterX-32, z.y+4);
+    });
+
+    // Aim cursor
+    const ax = bowl.aimX, ay = bowl.aimY;
+    cx.strokeStyle = '#FFD700'; cx.lineWidth = 2;
+    cx.beginPath();
+    cx.arc(ax, ay, 18, 0, Math.PI*2); cx.stroke();
+    cx.beginPath();
+    cx.moveTo(ax-25,ay); cx.lineTo(ax+25,ay);
+    cx.moveTo(ax,ay-25); cx.lineTo(ax,ay+25);
+    cx.stroke();
+    cx.shadowColor = '#FFD700'; cx.shadowBlur = 12;
+    cx.beginPath();
+    cx.arc(ax, ay, 5, 0, Math.PI*2); cx.fill();
+    cx.shadowBlur = 0;
+
+    // Aim instructions
+    cx.fillStyle = 'rgba(0,0,0,0.8)';
+    cx.beginPath(); cx.roundRect(BASE_W/2-180, BASE_H-55, 360, 40, 8); cx.fill();
+    cx.font = 'bold 14px Arial';
+    cx.textAlign = 'center';
+    cx.fillStyle = '#FFD700';
+    cx.fillText('Move mouse to aim · Click to BOWL!', BASE_W/2, BASE_H-30);
+
+    // Back button
+    const bkx = BASE_W*0.7+8, bky = BASE_H-55;
+    const bkHov = G.mouse.x>bkx && G.mouse.x<bkx+110 && G.mouse.y>bky && G.mouse.y<bky+32;
+    cx.fillStyle = bkHov ? '#555' : '#333';
+    cx.beginPath(); cx.roundRect(bkx, bky, 110, 32, 8); cx.fill();
+    cx.font = '13px Arial'; cx.fillStyle = '#ccc'; cx.textAlign = 'center';
+    cx.fillText('◀ Back', bkx+55, bky+21);
+    if (G.mouse.clicked && bkHov) { bowl.phase = 'select'; Audio.click(); }
+  }
+
+  // Delivering animation
+  if (bowl.phase === 'delivering') {
+    const t = bowl.deliveryProgress;
+    const bx = bowlerX + (batsmanX - bowlerX) * t;
+    const by = bowlerY + (batsmanY - bowlerY - 80) * t - Math.sin(t*Math.PI)*25;
+    drawBall(bx, by, 10, true);
+    drawBowler(bowlerX + (batsmanX-bowlerX)*Math.min(t*0.4,0.3),
+               bowlerY + 15*(1-t), G.selectedChar ? G.selectedChar.color : '#3b82f6', G.t*0.02);
+  }
+
+  // AI bat result display
+  if (bowl.aiDecision && bowl.aiTimer > 0) {
+    cx.save();
+    cx.globalAlpha = Math.min(1, bowl.aiTimer/200);
+    cx.font = 'bold 40px Arial Black';
+    cx.textAlign = 'center';
+    const rColor = bowl.aiDecision==='W' ? '#ff4444' :
+                   bowl.aiDecision==='6' ? '#22c55e' :
+                   bowl.aiDecision==='4' ? '#3b82f6' : '#FFD700';
+    cx.fillStyle = rColor;
+    cx.shadowColor = rColor; cx.shadowBlur = 25;
+    const rText = bowl.aiDecision==='W' ? 'WICKET!' :
+                  bowl.aiDecision==='6' ? 'SIX!' :
+                  bowl.aiDecision==='4' ? 'FOUR!' :
+                  bowl.aiDecision==='0' ? 'DOT BALL' : `${bowl.aiDecision} RUN${bowl.aiDecision!=='1'?'S':''}`;
+    cx.fillText(rText, batsmanX, batsmanY - 100);
+    cx.restore();
+  }
+}
+
+// ─── FIELDING UI ─────────────────────────────────────────────────
+function drawFieldingUI(m) {
+  const fld = m.field;
+  if (!fld.active) return;
+  const {fcx, fcy} = drawField_info();
+
+  // Ball arc
+  if (fld.progress < 1) {
+    const t = fld.progress;
+    const bx = fld.ballX + (fld.ballTargetX - fld.ballX)*t;
+    const by = fld.ballY + (fld.ballTargetY - fld.ballY)*t - Math.sin(t*Math.PI)*100;
+    drawBall(bx, by, 12, false);
+  }
+
+  // Fielding meter bar
+  const barX = BASE_W/2-120, barY = BASE_H - 120;
+  const barW = 240, barH = 28;
+  cx.fillStyle = 'rgba(0,0,0,0.85)';
+  cx.beginPath(); cx.roundRect(barX-10, barY-35, barW+20, barH+50, 10); cx.fill();
+  cx.strokeStyle = '#FFD700'; cx.lineWidth = 2;
+  cx.stroke();
+
+  cx.font = 'bold 13px Arial';
+  cx.textAlign = 'center';
+  cx.fillStyle = '#FFD700';
+  const fieldLabel = fld.type==='catch' ? '⚾ CATCH! Click in GREEN zone!' :
+                     fld.type==='runout' ? '🏃 RUN OUT! Click to throw!' : '🖐 SAVE! Click in GREEN zone!';
+  cx.fillText(fieldLabel, barX+barW/2, barY-10);
+
+  // Bar background
+  cx.fillStyle = '#333';
+  cx.beginPath(); cx.roundRect(barX, barY, barW, barH, barH/2); cx.fill();
+
+  // Green zone (center 30%)
+  const gzW = barW * 0.3, gzX = barX + barW/2 - gzW/2;
+  cx.fillStyle = '#22c55e';
+  cx.beginPath(); cx.roundRect(gzX, barY, gzW, barH, barH/2); cx.fill();
+  cx.fillStyle = '#FFD700';
+  cx.beginPath(); cx.roundRect(barX+barW*0.42, barY, barW*0.16, barH, barH/2); cx.fill();
+
+  // Slider
+  const sliderX = barX + fld.meterPos * barW;
+  cx.fillStyle = '#fff';
+  cx.shadowColor = '#fff'; cx.shadowBlur = 12;
+  cx.beginPath(); cx.arc(sliderX, barY+barH/2, barH/2+3, 0, Math.PI*2); cx.fill();
+  cx.shadowBlur = 0;
+
+  cx.font = 'bold 13px Arial';
+  cx.fillStyle = `rgba(255,255,255,${0.5+0.5*Math.sin(G.t*0.012)})`;
+  cx.fillText('CLICK NOW!', barX+barW/2, barY+barH+20);
+}
+
+// ─── STATE: HOME ─────────────────────────────────────────────────
+function renderHome() {
+  // Background gradient
+  const bgGrd = cx.createRadialGradient(BASE_W/2, BASE_H/2, 100, BASE_W/2, BASE_H/2, BASE_W*0.8);
+  bgGrd.addColorStop(0, '#1a1a2e');
+  bgGrd.addColorStop(0.5, '#0d0d1a');
+  bgGrd.addColorStop(1, '#000000');
+  cx.fillStyle = bgGrd;
+  cx.fillRect(0,0,BASE_W,BASE_H);
+
+  // Particles
+  drawHomeParticles();
+
+  // Glow center
+  const glowGrd = cx.createRadialGradient(BASE_W/2, BASE_H/2, 0, BASE_W/2, BASE_H/2, 300);
+  glowGrd.addColorStop(0, 'rgba(255,215,0,0.06)');
+  glowGrd.addColorStop(1, 'transparent');
+  cx.fillStyle = glowGrd;
+  cx.fillRect(0,0,BASE_W,BASE_H);
+
+  // Logo with pulse zoom
+  const logoZoom = 1 + Math.sin(G.t*0.002)*0.04;
+  const logoAlpha = Math.min(1, G.logoAlpha);
+  cx.save();
+  cx.translate(BASE_W/2, BASE_H/2 - 120);
+  cx.scale(logoZoom, logoZoom);
+  cx.translate(-BASE_W/2, -(BASE_H/2-120));
+  LogoSystem.draw(BASE_W/2, BASE_H/2-120, 340, logoAlpha, 20+15*Math.sin(G.t*0.003));
+  cx.restore();
+
+  // Tagline
+  cx.save();
+  cx.font = 'italic 18px "Segoe UI",Arial';
+  cx.textAlign = 'center';
+  cx.fillStyle = `rgba(200,164,0,${Math.min(1,G.logoAlpha)*0.9})`;
+  cx.shadowColor = '#FFD700'; cx.shadowBlur = 8;
+  cx.fillText('Mohalle ka Badshah Banna Hai?', BASE_W/2, BASE_H/2+35);
+  cx.restore();
+
+  // Divider
+  cx.save();
+  const lineAlpha = Math.min(1, G.logoAlpha);
+  cx.strokeStyle = `rgba(255,215,0,${lineAlpha*0.5})`;
+  cx.lineWidth = 1;
+  cx.beginPath();
+  cx.moveTo(BASE_W/2-200, BASE_H/2+55); cx.lineTo(BASE_W/2+200, BASE_H/2+55);
+  cx.stroke();
+  cx.restore();
+
+  // Buttons
+  G.buttons = [
+    makeBtn('⚡ MOHALLA TOURNAMENT', BASE_W/2-160, BASE_H/2+75, 320, 52, () => {
+      G.state = STATES.SETUP; G.matchMode = 'tournament';
+      initTournament('tournament');
+      Audio.transition();
+      setCharSelectButtons();
+    }, '#FFD700', '#000'),
+  ];
+  if (G.vehairiUnlocked) {
+    G.buttons.push(makeBtn('🏆 VEHARI CHAMPIONSHIP', BASE_W/2-160, BASE_H/2+140, 320, 52, () => {
+      G.state = STATES.VEHARI_MODE;
+      Audio.transition();
+    }, '#c084fc', '#ffffff'));
+  } else {
+    // Locked button
+    cx.fillStyle = 'rgba(100,100,100,0.5)';
+    cx.beginPath(); cx.roundRect(BASE_W/2-160, BASE_H/2+140, 320, 52, 26); cx.fill();
+    cx.strokeStyle = '#555'; cx.lineWidth = 1.5; cx.stroke();
+    cx.font = 'bold 15px Arial';
+    cx.textAlign = 'center';
+    cx.fillStyle = '#666';
+    cx.fillText('🔒 VEHARI CHAMPIONSHIP', BASE_W/2, BASE_H/2+171);
+    cx.font = '11px Arial';
+    cx.fillStyle = '#444';
+    cx.fillText('Win Mohalla Tournament to Unlock', BASE_W/2, BASE_H/2+187);
+  }
+
+  // Footer
+  cx.font = '12px Arial';
+  cx.textAlign = 'center';
+  cx.fillStyle = 'rgba(255,215,0,0.4)';
+  cx.fillText('SPACE · Click to interact  |  Voice Narration via Web Speech API', BASE_W/2, BASE_H-18);
+
+  G.buttons.forEach(renderBtn);
+  checkBtns();
+}
+
+// ─── STATE: CHARACTER SELECT ──────────────────────────────────────
+function renderCharSelect() {
+  // Background
+  const bgGrd = cx.createLinearGradient(0,0,0,BASE_H);
+  bgGrd.addColorStop(0,'#0a0a1e'); bgGrd.addColorStop(1,'#050510');
+  cx.fillStyle = bgGrd; cx.fillRect(0,0,BASE_W,BASE_H);
+  drawHomeParticles();
+
+  // Header
+  cx.font = 'bold 28px "Arial Black",Arial';
+  cx.textAlign = 'center';
+  cx.fillStyle = '#FFD700';
+  cx.shadowColor = '#FFD700'; cx.shadowBlur = 15;
+  cx.fillText('APNA KHILADI CHUNO', BASE_W/2, 48);
+  cx.shadowBlur = 0;
+  cx.font = '14px Arial';
+  cx.fillStyle = '#aaa';
+  cx.fillText('Choose your character for this tournament', BASE_W/2, 70);
+
+  // Character grid
+  const cols = 5, rows = 2;
+  const cardW = 200, cardH = 155;
+  const gap = 16;
+  const totalW = cols*cardW + (cols-1)*gap;
+  const startX = (BASE_W - totalW)/2;
+  const startY = 90;
+
+  CHARACTERS.forEach((char, idx) => {
+    const col = idx % cols, row = Math.floor(idx/cols);
+    const cx_ = startX + col*(cardW+gap);
+    const cy_ = startY + row*(cardH+gap);
+    const isHov = G.mouse.x>cx_ && G.mouse.x<cx_+cardW && G.mouse.y>cy_ && G.mouse.y<cy_+cardH;
+    const isSel = G.selectedChar && G.selectedChar.id === char.id;
+
+    // Card
+    cx.save();
+    if (isSel) { cx.shadowColor = char.color; cx.shadowBlur = 25; }
+    cx.fillStyle = isSel ? '#1a1a2e' : isHov ? '#111128' : '#0d0d1e';
+    cx.beginPath(); cx.roundRect(cx_, cy_, cardW, cardH, 10); cx.fill();
+    cx.strokeStyle = isSel ? char.color : isHov ? 'rgba(255,215,0,0.6)' : 'rgba(255,255,255,0.1)';
+    cx.lineWidth = isSel ? 3 : 1.5;
+    cx.stroke();
+    cx.shadowBlur = 0;
+
+    // Color bar
+    cx.fillStyle = char.color;
+    cx.beginPath(); cx.roundRect(cx_, cy_, cardW, 5, [10,10,0,0]); cx.fill();
+
+    // Character portrait (procedural)
+    drawCharPortrait(cx_+cardW/2, cy_+42, char, 28);
+
+    // Name + role
+    cx.font = `bold 13px Arial`;
+    cx.textAlign = 'center';
+    cx.fillStyle = isSel ? char.color : '#fff';
+    cx.fillText(char.name, cx_+cardW/2, cy_+80);
+    cx.font = '11px Arial';
+    cx.fillStyle = '#888';
+    cx.fillText(char.role, cx_+cardW/2, cy_+94);
+
+    // Mini stats bar
+    const stats = [['BAT',char.stats.bat],['BOW',char.stats.bowl],['SPD',char.stats.speed]];
+    stats.forEach(([lbl,val],si) => {
+      const bx = cx_+8 + si*((cardW-16)/3);
+      const bw = (cardW-16)/3 - 4;
+      const by_ = cy_ + cardH - 38;
+      cx.font = '8px Arial';
+      cx.fillStyle = '#666';
+      cx.textAlign = 'left';
+      cx.fillText(lbl, bx, by_-2);
+      cx.fillStyle = '#222';
+      cx.beginPath(); cx.roundRect(bx, by_, bw, 8, 4); cx.fill();
+      cx.fillStyle = char.color;
+      cx.beginPath(); cx.roundRect(bx, by_, bw*(val/100), 8, 4); cx.fill();
+    });
+
+    // Special ability
+    cx.font = '9px Arial';
+    cx.textAlign = 'center';
+    cx.fillStyle = '#FFD700';
+    cx.fillText(`★ ${char.special}`, cx_+cardW/2, cy_+cardH-8);
+
+    cx.restore();
+
+    if (G.mouse.clicked && isHov) {
+      G.selectedChar = char;
+      Audio.click();
+    }
+  });
+
+  // Confirm button
+  if (G.selectedChar) {
+    G.buttons = [
+      makeBtn(`CHALEIN! ▶`, BASE_W/2-120, BASE_H-62, 240, 46, () => {
+        G.state = STATES.PERMISSION_SCENE;
+        G.permissionLine = 0;
+        G.permissionTimer = 0;
+        Audio.transition();
+        Voice.play(G.selectedChar.permission[0], 'calm');
+      }, '#FFD700', '#000')
+    ];
+    G.buttons.forEach(renderBtn);
+    checkBtns();
+
+    // Selected character info panel
+    const sc = G.selectedChar;
+    cx.fillStyle = 'rgba(0,0,0,0.8)';
+    cx.beginPath(); cx.roundRect(BASE_W/2-240, BASE_H-85, 480, 22, 8); cx.fill();
+    cx.font = '12px Arial';
+    cx.textAlign = 'center';
+    cx.fillStyle = sc.color;
+    cx.fillText(`Selected: ${sc.name} — ${sc.desc}`, BASE_W/2, BASE_H-70);
+  } else {
+    G.buttons = [];
+    cx.font = '14px Arial';
+    cx.textAlign = 'center';
+    cx.fillStyle = 'rgba(255,215,0,0.5)';
+    cx.fillText('Click on a character to select', BASE_W/2, BASE_H-55);
+  }
+
+  // Back button
+  G.buttons.push(makeBtn('◀ Back', 20, 20, 100, 34, () => {
+    G.state = STATES.HOME; Audio.click();
+  }, '#333333', '#cccccc'));
+  G.buttons[G.buttons.length-1] && renderBtn(G.buttons[G.buttons.length-1]);
+  checkBtns();
+}
+
+function drawCharPortrait(x, y, char, r) {
+  cx.save();
+  // Circle background
+  const grd = cx.createRadialGradient(x, y, 0, x, y, r);
+  grd.addColorStop(0, char.color+'88');
+  grd.addColorStop(1, 'transparent');
+  cx.fillStyle = grd;
+  cx.beginPath(); cx.arc(x, y, r, 0, Math.PI*2); cx.fill();
+  // Head
+  cx.fillStyle = '#c68642';
+  cx.beginPath(); cx.arc(x, y-4, r*0.4, 0, Math.PI*2); cx.fill();
+  // Hair/hat based on char
+  const hairColor = char.color;
+  cx.fillStyle = hairColor;
+  cx.beginPath(); cx.arc(x, y-r*0.48, r*0.38, Math.PI, 0); cx.fill();
+  // Body
+  cx.fillStyle = char.color;
+  cx.beginPath(); cx.roundRect(x-r*0.38, y+r*0.06, r*0.76, r*0.7, 3); cx.fill();
+  // Letter initial
+  cx.font = `bold ${r*0.55}px Arial`;
+  cx.textAlign = 'center';
+  cx.fillStyle = '#fff';
+  cx.fillText(char.name[0], x, y+r*0.55);
+  cx.restore();
+}
+
+// ─── STATE: PERMISSION SCENE ──────────────────────────────────────
+function renderPermissionScene() {
+  const char = G.selectedChar;
+  if (!char) { G.state = STATES.CHARACTER_SELECT; return; }
+
+  // Dark cinematic bg
+  cx.fillStyle = '#000';
+  cx.fillRect(0,0,BASE_W,BASE_H);
+
+  // Subtle gradient
+  const bgG = cx.createRadialGradient(BASE_W/2, BASE_H/2, 0, BASE_W/2, BASE_H/2, 600);
+  bgG.addColorStop(0, 'rgba(26,26,46,0.9)');
+  bgG.addColorStop(1, '#000');
+  cx.fillStyle = bgG;
+  cx.fillRect(0,0,BASE_W,BASE_H);
+
+  // Scene title
+  cx.font = 'bold 14px Arial';
+  cx.textAlign = 'center';
+  cx.fillStyle = 'rgba(255,215,0,0.7)';
+  cx.fillText('PERMISSION SCENE', BASE_W/2, 35);
+
+  // Cinematic letterbox
+  cx.fillStyle = '#000';
+  cx.fillRect(0,0,BASE_W,60);
+  cx.fillRect(0,BASE_H-60,BASE_W,60);
+
+  // Character portrait (large)
+  drawCharPortrait(BASE_W/2 - 200, BASE_H/2, char, 80);
+
+  // Character name
+  cx.font = 'bold 24px Arial';
+  cx.textAlign = 'center';
+  cx.fillStyle = char.color;
+  cx.shadowColor = char.color; cx.shadowBlur = 15;
+  cx.fillText(char.name, BASE_W/2 - 200, BASE_H/2 + 110);
+  cx.shadowBlur = 0;
+  cx.font = '14px Arial';
+  cx.fillStyle = '#888';
+  cx.fillText(char.role, BASE_W/2 - 200, BASE_H/2 + 130);
+
+  // Dialogue box
+  const lines = char.permission;
+  const currentLine = lines[Math.min(G.permissionLine, lines.length-1)];
+  const isLastLine = G.permissionLine >= lines.length - 1;
+
+  // NPC figure for dialogue
+  const npcX = BASE_W/2 + 180, npcY = BASE_H/2 + 20;
+  if (G.permissionLine > 0) {
+    // Parent figure
+    cx.fillStyle = '#555';
+    cx.beginPath(); cx.arc(npcX, npcY - 40, 28, 0, Math.PI*2); cx.fill();
+    cx.fillStyle = '#c68642';
+    cx.beginPath(); cx.arc(npcX, npcY - 42, 22, 0, Math.PI*2); cx.fill();
+    cx.fillStyle = '#888';
+    cx.beginPath(); cx.arc(npcX, npcY - 42, 22, Math.PI, 0); cx.fill();
+    cx.fillStyle = '#333';
+    cx.beginPath(); cx.roundRect(npcX-24, npcY-18, 48, 55, 4); cx.fill();
+  }
+
+  // Dialogue box
+  const dbX = BASE_W/2 - 80, dbY = BASE_H/2 - 120;
+  const dbW = 500, dbH = 100;
+  cx.fillStyle = 'rgba(0,0,0,0.9)';
+  cx.beginPath(); cx.roundRect(dbX, dbY, dbW, dbH, 12); cx.fill();
+  cx.strokeStyle = isLastLine ? '#ff4444' : char.color;
+  cx.lineWidth = 2; cx.stroke();
+
+  // Dialogue text
+  cx.font = 'bold 16px "Segoe UI",Arial';
+  cx.textAlign = 'left';
+  cx.fillStyle = isLastLine ? '#ff9999' : '#fff';
+  const dialogueText = currentLine || '';
+  // Word wrap
+  wrapText(cx, dialogueText, dbX+18, dbY+35, dbW-36, 26, 16, isLastLine ? '#ff9999' : '#fff');
+
+  // Progress dots
+  lines.forEach((_, i) => {
+    cx.fillStyle = i <= G.permissionLine ? char.color : '#333';
+    cx.beginPath(); cx.arc(BASE_W/2 + (i-lines.length/2+0.5)*22, dbY+dbH+20, 6, 0, Math.PI*2); cx.fill();
+  });
+
+  // Advance button
+  G.buttons = [makeBtn(
+    G.permissionLine < lines.length-1 ? 'Next ▶' : 'Let\'s Play! ▶',
+    BASE_W/2-100, BASE_H-90, 200, 44,
+    () => {
+      if (G.permissionLine < lines.length - 1) {
+        G.permissionLine++;
+        Voice.play(lines[G.permissionLine], G.permissionLine===lines.length-1?'dramatic':'calm');
+        Audio.click();
+      } else {
+        G.state = STATES.MATCH_INTRO;
+        G.matchIntroTimer = 0;
+        setupMatchIntro();
+        Audio.transition();
+      }
+    }, char.color, '#000')];
+  G.buttons.forEach(renderBtn);
+  checkBtns();
+}
+
+function wrapText(ctx, text, x, y, maxW, lineH, fontSize, color) {
+  const words = text.split(' ');
+  let line = '', lines = [];
+  words.forEach(w => {
+    const test = line + (line?' ':'') + w;
+    if (ctx.measureText(test).width > maxW) { lines.push(line); line = w; }
+    else line = test;
+  });
+  lines.push(line);
+  ctx.fillStyle = color;
+  ctx.font = `bold ${fontSize}px "Segoe UI",Arial`;
+  lines.forEach((l,i) => ctx.fillText(l, x, y + i*lineH));
+}
+
+// ─── STATE: MATCH INTRO ───────────────────────────────────────────
+function setupMatchIntro() {
+  const opponent = getNextOpponent();
+  const oppName = opponent ? opponent.opponent.name : 'Opponent';
+  const playerName = G.selectedChar ? `${G.selectedChar.name}'s XI` : 'Player XI';
+  G.matchData = createMatch(playerName, oppName, G.matchMode==='vehari'?10:6, true);
+  G.matchIntroTimer = 0;
+}
+
+function renderMatchIntro() {
+  const timer = G.matchIntroTimer;
+  const totalDur = 4000;
+  const progress = Math.min(1, timer / totalDur);
+
+  cx.fillStyle = '#000';
+  cx.fillRect(0,0,BASE_W,BASE_H);
+
+  // Phase 1: Logo reveal (0-0.4)
+  if (progress < 0.4) {
+    const p = progress / 0.4;
+    const glowAmount = 30 + 20*Math.sin(G.t*0.005);
+    LogoSystem.draw(BASE_W/2, BASE_H/2, 280, easeIn(p), glowAmount);
+  }
+  // Phase 2: Teams (0.4-0.8)
+  else if (progress < 0.8) {
+    const p = (progress - 0.4) / 0.4;
+    LogoSystem.draw(BASE_W/2, BASE_H*0.22, 160, 1, 15);
+
+    cx.save();
+    cx.globalAlpha = easeIn(p);
+    cx.font = 'bold 38px "Arial Black",Arial';
+    cx.textAlign = 'center';
+    cx.fillStyle = '#FFD700';
+    cx.shadowColor = '#FFD700'; cx.shadowBlur = 20;
+    cx.fillText(G.matchData.playerTeamName, BASE_W/2, BASE_H/2 - 30);
+    cx.shadowBlur = 0;
+    cx.font = 'bold 24px Arial';
+    cx.fillStyle = '#888';
+    cx.fillText('VS', BASE_W/2, BASE_H/2+10);
+    cx.font = 'bold 34px "Arial Black",Arial';
+    cx.fillStyle = '#ff4444';
+    cx.shadowColor = '#ff4444'; cx.shadowBlur = 15;
+    cx.fillText(G.matchData.oppTeamName, BASE_W/2, BASE_H/2+55);
+    cx.shadowBlur = 0;
+    cx.restore();
+  }
+  // Phase 3: Cinematic text (0.8-1.0)
+  else {
+    const p = (progress - 0.8) / 0.2;
+    LogoSystem.draw(BASE_W/2, BASE_H*0.2, 150, 1, 12);
+
+    cx.save();
+    cx.globalAlpha = easeIn(p);
+    cx.font = 'bold 22px Arial';
+    cx.textAlign = 'center';
+    cx.fillStyle = '#FFD700';
+    cx.fillText(G.matchData.playerTeamName, BASE_W/2, BASE_H/2-20);
+    cx.font = '18px Arial';
+    cx.fillStyle = '#888';
+    cx.fillText('vs', BASE_W/2, BASE_H/2+10);
+    cx.fillStyle = '#ff4444';
+    cx.font = 'bold 22px Arial';
+    cx.fillText(G.matchData.oppTeamName, BASE_W/2, BASE_H/2+40);
+
+    cx.font = 'bold 20px Arial';
+    cx.fillStyle = '#aaa';
+    const modeStr = G.matchMode==='vehari' ? 'Vehari City Championship' : 'Mohalla Tournament';
+    cx.fillText(`${modeStr} • ${G.matchData.totalOvers} Overs`, BASE_W/2, BASE_H/2+80);
+    cx.restore();
+
+    if (p > 0.7) {
+      cx.save();
+      cx.globalAlpha = (p-0.7)/0.3;
+      cx.font = `bold 18px Arial`;
+      cx.textAlign = 'center';
+      cx.fillStyle = `rgba(255,215,0,${0.6+0.4*Math.sin(G.t*0.01)})`;
+      cx.fillText('Click to proceed to TOSS', BASE_W/2, BASE_H-45);
+      cx.restore();
+    }
+  }
+
+  G.matchIntroTimer += G.dt;
+
+  if (progress >= 0.8) {
+    G.buttons = [makeBtn('TOSS KA WAQT! ▶', BASE_W/2-130, BASE_H-68, 260, 48, () => {
+      G.state = STATES.TOSS;
+      tossPhase = 'waiting'; tossCoinAngle = 0; tossFlipTimer = 0;
+      Voice.play(`Match shuru hone wala hai! ${G.matchData.playerTeamName} vs ${G.matchData.oppTeamName}`, 'hype');
+      Audio.transition();
+    }, '#FFD700', '#000')];
+    G.buttons.forEach(renderBtn);
+    checkBtns();
+  }
+}
+
+function easeIn(t) { return t*t; }
+function easeOut(t) { return 1-(1-t)*(1-t); }
+function lerp(a,b,t) { return a+(b-a)*t; }
+
+// ─── STATE: TOSS ──────────────────────────────────────────────────
+let tossCoinY = BASE_H/2 - 100;
+let tossCoinAngle = 0;
+let tossPhase = 'waiting'; // waiting, flipping, result
+let tossFlipTimer = 0;
+
+function renderToss() {
+  cx.fillStyle = '#0a0a1e';
+  cx.fillRect(0,0,BASE_W,BASE_H);
+  drawHomeParticles();
+
+  cx.font = 'bold 26px "Arial Black"';
+  cx.textAlign = 'center';
+  cx.fillStyle = '#FFD700';
+  cx.shadowColor = '#FFD700'; cx.shadowBlur = 15;
+  cx.fillText('TOSS KA WAQT!', BASE_W/2, 70);
+  cx.shadowBlur = 0;
+
+  if (tossPhase === 'waiting') {
+    // Coin display
+    drawCoin(BASE_W/2, BASE_H/2 - 40, 60, tossCoinAngle);
+    tossCoinAngle += 0.02;
+    cx.font = '16px Arial';
+    cx.fillStyle = '#ccc';
+    cx.fillText('Choose Heads or Tails', BASE_W/2, BASE_H/2 + 50);
+    G.buttons = [
+      makeBtn('HEADS', BASE_W/2-130, BASE_H/2+75, 120, 44, () => tossFlip('heads'), '#FFD700', '#000'),
+      makeBtn('TAILS', BASE_W/2+10, BASE_H/2+75, 120, 44, () => tossFlip('tails'), '#555555', '#ffffff'),
+    ];
+    G.buttons.forEach(renderBtn);
+    checkBtns();
+  } else if (tossPhase === 'flipping') {
+    tossFlipTimer += G.dt;
+    const speed = 0.2 + tossFlipTimer*0.001;
+    tossCoinAngle += speed;
+    const coinY = BASE_H/2 - 40 - Math.sin(Math.min(1,tossFlipTimer/800)*Math.PI)*80;
+    drawCoin(BASE_W/2, coinY, 60, tossCoinAngle);
+    if (tossFlipTimer > 1500) {
+      tossPhase = 'result';
+      // Determine result
+      G.tossResult = Math.random() < 0.5 ? 'heads' : 'tails';
+      const playerWon = G.tossResult === G.tossChoice;
+      Audio.crowd(playerWon ? 0.8 : 0.3);
+      if (playerWon) Voice.play("Toss jeet liya! Aap choose karo!", 'hype');
+      else Voice.play("Toss haar gaye, lekin match toh khelna hai!", 'calm');
+    }
+  } else { // result
+    drawCoin(BASE_W/2, BASE_H/2 - 60, 60, tossCoinAngle);
+    const playerWon = G.tossResult === G.tossChoice;
+
+    cx.font = 'bold 22px Arial';
+    cx.textAlign = 'center';
+    cx.fillStyle = G.tossResult==='heads' ? '#FFD700' : '#ccc';
+    cx.fillText(G.tossResult.toUpperCase(), BASE_W/2, BASE_H/2 + 10);
+
+    cx.font = 'bold 20px Arial';
+    cx.fillStyle = playerWon ? '#22c55e' : '#ff4444';
+    cx.fillText(playerWon ? 'Toss Jeet Gaye! 🎉' : 'Toss Haar Gaye', BASE_W/2, BASE_H/2+40);
+
+    if (playerWon) {
+      cx.font = '15px Arial';
+      cx.fillStyle = '#FFD700';
+      cx.fillText('Choose: Bat first or Bowl first?', BASE_W/2, BASE_H/2+70);
+      G.buttons = [
+        makeBtn('🏏 BAT FIRST', BASE_W/2-145, BASE_H/2+90, 135, 44, () => {
+          G.playerBatFirst = true; G.matchData.playerBatFirst = true;
+          startMatch(); Audio.click();
+        }, '#22c55e', '#fff'),
+        makeBtn('🎯 BOWL FIRST', BASE_W/2+10, BASE_H/2+90, 135, 44, () => {
+          G.playerBatFirst = false; G.matchData.playerBatFirst = false;
+          startMatch(); Audio.click();
+        }, '#3b82f6', '#fff'),
+      ];
+    } else {
+      const oppChoice = Math.random()<0.5 ? 'bat' : 'bowl';
+      cx.font = '15px Arial';
+      cx.fillStyle = '#aaa';
+      cx.fillText(`${G.matchData.oppTeamName} chose to ${oppChoice} first`, BASE_W/2, BASE_H/2+70);
+      G.playerBatFirst = oppChoice === 'bowl'; // if opp bats, player bowls 1st
+      G.matchData.playerBatFirst = G.playerBatFirst;
+      G.buttons = [makeBtn('Let\'s Go! ▶', BASE_W/2-80, BASE_H/2+95, 160, 44, () => {
+        startMatch(); Audio.click();
+      }, '#FFD700', '#000')];
+    }
+    G.buttons.forEach(renderBtn);
+    checkBtns();
+  }
+}
+
+function tossFlip(choice) {
+  G.tossChoice = choice;
+  tossPhase = 'flipping';
+  tossFlipTimer = 0;
+  Audio.click();
+  Audio.crowd(0.4);
+}
+
+function drawCoin(x, y, r, angle) {
+  const scaleX = Math.abs(Math.cos(angle));
+  cx.save();
+  cx.translate(x, y);
+  cx.scale(scaleX, 1);
+  cx.translate(-x, -y);
+  const grd = cx.createRadialGradient(x-r*0.3, y-r*0.3, r*0.1, x, y, r);
+  grd.addColorStop(0, '#FFE566');
+  grd.addColorStop(0.5, '#FFD700');
+  grd.addColorStop(1, '#C8A400');
+  cx.fillStyle = grd;
+  cx.shadowColor = '#FFD700'; cx.shadowBlur = 20;
+  cx.beginPath(); cx.arc(x, y, r, 0, Math.PI*2); cx.fill();
+  cx.strokeStyle = '#C8A400'; cx.lineWidth = 3; cx.stroke();
+  cx.shadowBlur = 0;
+  if (Math.cos(angle) > 0) {
+    // Heads
+    cx.font = `bold ${r*0.45}px Arial`;
+    cx.textAlign = 'center';
+    cx.fillStyle = '#8B6914';
+    cx.fillText('H', x, y + r*0.16);
+  } else {
+    cx.font = `bold ${r*0.45}px Arial`;
+    cx.textAlign = 'center';
+    cx.fillStyle = '#8B6914';
+    cx.fillText('T', x, y + r*0.16);
+  }
+  cx.restore();
+}
+
+function startMatch() {
+  G.inningsNum = 0;
+  G.matchData.currentInnings = 0;
+  const isPlayerBatting0 = G.matchData.playerBatFirst;
+  G.state = STATES.FIRST_INNINGS;
+  G.matchData.phase = 'idle';
+  G.matchData.bat.deliveryType = randomDeliveryType();
+  // Schedule first delivery
+  startNextDelivery(G.matchData);
+  const batOrBowl = isPlayerBatting(G.matchData) ? 'batting' : 'bowling';
+  Voice.play(`${batOrBowl === 'batting'?'Batting':'Bowling'} shuru ho rahi hai! Ready ho jao!`, 'hype');
+  CoachWasay.getLine('good_start');
+  Audio.crowd(0.6);
+}
+
+function randomDeliveryType() {
+  const types = ['Yorker','Bouncer','Swing','Spinner','Googly','Slower','Normal'];
+  return types[Math.floor(Math.random()*types.length)];
+}
+
+// ─── MATCH DELIVERY FLOW ─────────────────────────────────────────
+function startNextDelivery(m) {
+  const inn = currentInn(m);
+  if (inn.wickets >= 10 || inn.overs >= m.totalOvers) {
+    const end = checkInningsEnd(m);
+    if (end === 'innings_break') {
+      G.state = STATES.INNINGS_BREAK;
+      G.inningsNum = 1;
+      Voice.play(`First innings over! Target: ${m.target} runs!`, 'dramatic');
+      Audio.crowd(0.7);
+      CoachWasay.getLine('default');
+    } else if (end === 'match_over') {
+      endMatch();
+    }
+    return;
+  }
+
+  m.phase = isPlayerBatting(m) ? 'batting' : 'bowling';
+
+  if (isPlayerBatting(m)) {
+    // Setup batting delivery
+    m.bat.meterAngle = 0;
+    m.bat.sweetAngle = 0.5 + Math.random() * Math.PI * 1.5;
+    m.bat.sweetWidth = 0.4 + Math.random() * 0.3;
+    m.bat.goodWidth = 1.2 + Math.random() * 0.4;
+    m.bat.meterSpeed = 1.8 + (G.level * 0.1) + (inn.overs > m.totalOvers*0.7 ? 0.4 : 0);
+    m.bat.canSwing = false;
+    m.bat.ballIncoming = true;
+    m.bat.ballProgress = 0;
+    m.bat.ballX = BASE_W*0.38;
+    m.bat.ballY = BASE_H/2 - 80;
+    m.bat.ballTargetX = BASE_W*0.38;
+    m.bat.ballTargetY = BASE_H/2 + 60;
+    m.bat.swingResult = null;
+    m.bat.resultTimer = 0;
+    m.bat.deliveryType = randomDeliveryType();
+    if (m.bat.dotCount >= 4) CoachWasay.getLine('dot_balls');
+  } else {
+    // Setup bowling
+    m.bowl.phase = 'select';
+    m.bowl.aimX = BASE_W*0.38;
+    m.bowl.aimY = BASE_H/2 - 10;
+    m.bowl.deliveryProgress = 0;
+    m.bowl.aiDecision = null;
+    m.bowl.aiTimer = 0;
+  }
+
+  // Check for random event (every 3 overs)
+  if (!G.eventActive && inn.balls === 0 && inn.overs > 0 && inn.overs % 3 === 0) {
+    maybeSpawnEvent();
+  }
+  // Check for commentary triggers
+  if (inn.runs >= 50 && inn.runs - m.lastRuns < 10 && inn.runs % 50 === 0) {
+    Voice.play(commentaryPool(inn.runs>=100?'milestone100':'milestone50'), 'hype');
+  }
+  m.lastRuns = inn.runs;
+}
+
+function maybeSpawnEvent() {
+  if (Math.random() < 0.5) return; // 50% chance per eligible over
+  const event = RANDOM_EVENTS[Math.floor(Math.random()*RANDOM_EVENTS.length)];
+  G.eventActive = true;
+  G.eventData = event;
+  G.eventTimer = event.duration;
+  Voice.play(event.voiceLine, event.tone);
+  Audio.crowd(0.3);
+}
+
+function processBatResult(m, runs) {
+  const inn = currentInn(m);
+  nextBall(m);
+  if (runs === 'W') {
+    addWicket(m);
+    Audio.wicket();
+    Audio.crowd(0.8);
+    m.bat.resultText = 'OUT! ❌';
+    m.bat.resultColor = '#ff4444';
+    m.bat.resultTimer = 600;
+    const comment = commentaryPool('wicket');
+    Voice.play(comment, 'dramatic');
+    m.lastComment = comment; m.commentTimer = 2500;
+    Particles.spawn(BASE_W*0.38, BASE_H/2+50, '#ff4444', 25, 60, 4);
+    CoachWasay.getLine('wicket');
+    G.runResultText = 'WICKET! ❌'; G.runResultColor = '#ff4444'; G.runResultTimer = 120;
+  } else {
+    addRuns(m, runs);
+    if (runs === 6) { Audio.six(); Particles.spawnGold(BASE_W*0.38, BASE_H/2+50, 50); m.bat.resultText='SIX! 💥'; m.bat.resultColor='#22c55e'; Voice.play(commentaryPool('six'),'hype'); CoachWasay.getLine('six'); G.runResultText='SIX! 💥'; G.runResultColor='#22c55e'; G.runResultTimer=150; }
+    else if (runs === 4) { Audio.four(); Particles.spawn(BASE_W*0.38, BASE_H/2+50,'#3b82f6',20,60,3); m.bat.resultText='FOUR! ✓'; m.bat.resultColor='#3b82f6'; Voice.play(commentaryPool('four'),'hype'); G.runResultText='FOUR! 💙'; G.runResultColor='#3b82f6'; G.runResultTimer=130; }
+    else if (runs > 0) { m.bat.resultText=`${runs} RUN${runs>1?'S':''}!`; m.bat.resultColor='#FFD700'; Voice.play(commentaryPool(String(runs)),'calm'); G.runResultText=`+${runs}`; G.runResultColor='#FFD700'; G.runResultTimer=90; }
+    else { m.bat.resultText='DOT BALL'; m.bat.resultColor='#aaa'; const c=commentaryPool('dot'); Voice.play(c,'calm'); m.lastComment=c; m.commentTimer=1800; G.runResultText='●'; G.runResultColor='#888'; G.runResultTimer=80; }
+    m.bat.resultTimer = 600;
+  }
+  m.bat.swingResult = runs;
+  m.bat.ballIncoming = false;
+  m.bat.canSwing = false;
+
+  // Check innings end
+  const endResult = checkInningsEnd(m);
+  if (endResult === 'innings_break') {
+    G.state = STATES.INNINGS_BREAK;
+    return;
+  } else if (endResult === 'match_over') { endMatch(); return; }
+
+  // Check target achieved (2nd innings batting)
+  if (m.currentInnings===1 && m.target && currentInn(m).runs >= m.target) {
+    endMatch(); return;
+  }
+
+  // Schedule next delivery after delay
+  setTimeout(() => {
+    if (G.state===STATES.FIRST_INNINGS||G.state===STATES.SECOND_INNINGS) {
+      startNextDelivery(m);
+    }
+  }, 1200);
+}
+
+function processBowlResult(m, deliveryType, accuracy) {
+  // Simulate AI batsman reaction
+  const aiResult = aiBatResult(m, deliveryType);
+  m.bowl.aiDecision = aiResult;
+  m.bowl.aiTimer = 900;
+  m.bowl.phase = 'result';
+
+  const inn = currentInn(m);
+  nextBall(m);
+
+  if (aiResult === 'W') {
+    addWicket(m);
+    Audio.wicket(); Audio.crowd(0.9);
+    Voice.play(commentaryPool('wicket'), 'dramatic');
+    Particles.spawn(BASE_W*0.38, BASE_H/2+50,'#ff4444',25,60,4);
+    CoachWasay.getLine('six'); // coach celebrates
+    G.runResultText='WICKET! ✅'; G.runResultColor='#22c55e'; G.runResultTimer=150;
+  } else {
+    const runs = parseInt(aiResult) || 0;
+    addRuns(m, runs);
+    if (runs === 6) { Audio.six(); Particles.spawn(BASE_W*0.38, BASE_H/2+50,'#ff4444',25,60,4); Voice.play(commentaryPool('six'),'dramatic'); CoachWasay.getLine('wicket'); G.runResultText='SIX! 😱'; G.runResultColor='#ff4444'; G.runResultTimer=150; }
+    else if (runs === 4) { Audio.four(); Voice.play(commentaryPool('four'),'dramatic'); G.runResultText='FOUR! 😬'; G.runResultColor='#ff6b35'; G.runResultTimer=130; }
+    else if (runs > 0) { Voice.play(commentaryPool(String(runs)),'calm'); G.runResultText=`+${runs}`; G.runResultColor='#ff9966'; G.runResultTimer=90; }
+    else { Voice.play(commentaryPool('dot'),'calm'); G.runResultText='DOT!'; G.runResultColor='#22c55e'; G.runResultTimer=80; }
+  }
+
+  const endResult = checkInningsEnd(m);
+  if (endResult === 'innings_break') { G.state = STATES.INNINGS_BREAK; return; }
+  else if (endResult === 'match_over') { endMatch(); return; }
+
+  if (m.currentInnings===1 && m.target && currentInn(m).runs >= m.target) { endMatch(); return; }
+
+  setTimeout(() => {
+    if (G.state===STATES.FIRST_INNINGS||G.state===STATES.SECOND_INNINGS) {
+      m.bowl.phase = 'select';
+      m.bowl.aiDecision = null;
+      startNextDelivery(m);
+    }
+  }, 1400);
+}
+
+function endMatch() {
+  const m = G.matchData;
+  m.phase = 'match_over';
+  const result = getMatchResult(m);
+  const won = result.winner === 'player';
+
+  // XP rewards
+  const xpGained = won ? 120 + G.level*10 : 40;
+  G.xp += xpGained;
+  if (G.xp >= G.level * 200) { G.level++; }
+
+  // Update tournament
+  if (G.tournamentData) {
+    const sched = G.tournamentData.schedule;
+    const current = sched.find(s=>!s.played);
+    if (current) { current.played = true; current.result = result; }
+    if (won) G.tournamentData.playerWins++;
+    else G.tournamentData.playerLosses++;
+  }
+
+  G.resultData = { result, xpGained, matchData: m };
+  G.state = STATES.RESULT;
+  Audio.crowd(won ? 1.0 : 0.3);
+  if (won) { Audio.cheer(); Particles.spawnGold(BASE_W/2, BASE_H/2, 80); }
+  Voice.play(won ? 'MATCH JEET LIYA! BADSHAH HO TUM!' : 'Haar gaye is baar, lekin seekh lo!', won?'hype':'dramatic');
+  CoachWasay.getLine(won ? 'six' : 'collapse');
+}
+
+// ─── MATCH RENDER (CORE) ─────────────────────────────────────────
+function renderMatch(state) {
+  const m = G.matchData;
+  if (!m) return;
+  const isBatting = isPlayerBatting(m);
+
+  // Background
+  cx.fillStyle = '#040408';
+  cx.fillRect(0,0,BASE_W,BASE_H);
+
+  // Field (60% of width)
+  drawField();
+  drawFielders(m);
+
+  // Ball + Player animations based on phase
+  if (m.phase === 'batting' || m.phase === 'idle') drawBattingUI(m);
+  else if (m.phase === 'bowling') drawBowlingUI(m);
+
+  if (m.field.active) drawFieldingUI(m);
+
+  // Scoreboard panel (right 31%)
+  drawScoreboard(m, BASE_W*0.695, 8, BASE_W*0.295, BASE_H-16);
+
+  // Coach Wasay (right bottom corner)
+  CoachWasay.render(BASE_W*0.695, BASE_H-190, BASE_W*0.295, 182);
+
+  // Commentary bar
+  if (m.commentTimer > 0) {
+    const alpha = Math.min(1, m.commentTimer/300);
+    cx.save();
+    cx.globalAlpha = alpha;
+    cx.fillStyle = 'rgba(0,0,0,0.88)';
+    cx.beginPath();
+    cx.roundRect(BASE_W*0.01, BASE_H-42, BASE_W*0.67, 36, 8);
+    cx.fill();
+    cx.font = 'bold 13px "Segoe UI",Arial';
+    cx.textAlign = 'left';
+    cx.fillStyle = '#FFD700';
+    cx.fillText(`💬 Chai Wala Akbar: "${m.lastComment}"`, BASE_W*0.015, BASE_H-18);
+    cx.restore();
+    m.commentTimer -= G.dt;
+  }
+
+  // Run result flash
+  if (G.runResultTimer > 0) {
+    cx.save();
+    cx.globalAlpha = Math.min(1, G.runResultTimer/40);
+    cx.font = 'bold 52px "Arial Black",Arial';
+    cx.textAlign = 'center';
+    cx.fillStyle = G.runResultColor;
+    cx.shadowColor = G.runResultColor; cx.shadowBlur = 30;
+    cx.fillText(G.runResultText, BASE_W*0.32, BASE_H*0.28);
+    cx.restore();
+    G.runResultTimer--;
+  }
+
+  // Random event overlay
+  if (G.eventActive && G.eventData) {
+    drawEventOverlay(G.eventData);
+    G.eventTimer -= G.dt;
+    if (G.eventTimer <= 0) { G.eventActive = false; G.eventData = null; }
+  }
+
+  // Update batting mechanics
+  if (m.phase === 'batting') {
+    if (m.bat.ballIncoming) {
+      m.bat.ballProgress += G.dt / 800;
+      if (m.bat.ballProgress >= 0.65 && !m.bat.canSwing) {
+        m.bat.canSwing = true;
+        m.bat.meterAngle = Math.random() * Math.PI * 2;
+      }
+      if (m.bat.ballProgress >= 1.0 && m.bat.canSwing && !m.bat.swingResult) {
+        // Missed! Auto wicket after timeout
+        // Don't auto-miss immediately - give player a moment
+      }
+    }
+    if (m.bat.canSwing) {
+      m.bat.meterAngle += (m.bat.meterSpeed * G.dt) / 1000;
+    }
+    if (m.bat.resultTimer > 0) m.bat.resultTimer -= G.dt;
+    if (m.bat.swingResult !== null && m.bat.resultTimer <= 0 && m.phase==='batting') {
+      m.phase = 'idle'; // waiting for next delivery
+    }
+  }
+
+  // Update bowling mechanics
+  if (m.phase === 'bowling') {
+    if (m.bowl.phase === 'delivering') {
+      m.bowl.deliveryProgress += G.dt / 700;
+      if (m.bowl.deliveryProgress >= 1 && m.bowl.aiDecision === null) {
+        const types = ['Yorker','Bouncer','Swing','Spinner','Googly','Slower'];
+        processBowlResult(m, types[m.bowl.selectedType], 'GOOD');
+      }
+    }
+    if (m.bowl.aiTimer > 0) m.bowl.aiTimer -= G.dt;
+    // Mouse aim update
+    if (m.bowl.phase === 'aim') {
+      m.bowl.aimX = G.mouse.x;
+      m.bowl.aimY = Math.min(Math.max(G.mouse.y, BASE_H/2-115), BASE_H/2+95);
+    }
+    // Click to bowl in aim phase
+    if (m.bowl.phase === 'aim' && G.mouse.clicked) {
+      const types = ['Yorker','Bouncer','Swing','Spinner','Googly','Slower'];
+      const notBack = !(G.mouse.x > BASE_W*0.7+8 && G.mouse.x < BASE_W*0.7+118 && G.mouse.y > BASE_H-55 && G.mouse.y < BASE_H-23);
+      if (notBack) {
+        m.bowl.phase = 'delivering';
+        m.bowl.deliveryProgress = 0;
+        m.bowl.aiDecision = null;
+        Audio.bat(0.3);
+      }
+    }
+  }
+
+  // Update fielding
+  if (m.field.active) {
+    m.field.meterPos += m.field.meterDir * m.field.meterSpeed;
+    if (m.field.meterPos >= 1 || m.field.meterPos <= 0) m.field.meterDir *= -1;
+    m.field.meterPos = Math.max(0, Math.min(1, m.field.meterPos));
+    m.field.timer--;
+    m.field.progress = Math.min(1, 1 - m.field.timer/120);
+    if (m.field.timer <= 0 || (G.mouse.clicked && m.field.active)) {
+      resolveFielding(m);
+    }
+  }
+}
+
+function drawEventOverlay(evt) {
+  cx.save();
+  cx.fillStyle = 'rgba(0,0,0,0.75)';
+  cx.fillRect(0,0,BASE_W,BASE_H);
+
+  const pulse = 1 + 0.05*Math.sin(G.t*0.015);
+  cx.scale(pulse, pulse);
+  cx.translate(BASE_W/2*(1-pulse), BASE_H/2*(1-pulse));
+
+  cx.fillStyle = 'rgba(10,10,30,0.95)';
+  cx.beginPath();
+  cx.roundRect(BASE_W/2-280, BASE_H/2-90, 560, 180, 16);
+  cx.fill();
+  cx.strokeStyle = '#FFD700'; cx.lineWidth = 2.5;
+  cx.stroke();
+
+  // Event icon
+  const icons = {aunty:'👩', dog:'🐕', police:'👮', rain:'🌧', power_cut:'⚡', car:'🚗', guddu:'👶', chacha_story:'🏏'};
+  cx.font = '48px serif';
+  cx.textAlign = 'center';
+  cx.fillText(icons[evt.id] || '⚠', BASE_W/2, BASE_H/2-30);
+
+  cx.font = 'bold 20px "Arial Black"';
+  cx.fillStyle = '#FFD700';
+  cx.fillText(evt.title, BASE_W/2, BASE_H/2+12);
+
+  cx.font = '14px Arial';
+  cx.fillStyle = '#ccc';
+  cx.fillText(evt.desc, BASE_W/2, BASE_H/2+38);
+
+  cx.font = 'bold 13px Arial';
+  cx.fillStyle = `rgba(255,215,0,${0.5+0.5*Math.sin(G.t*0.01)})`;
+  cx.fillText('Match paused... resuming shortly', BASE_W/2, BASE_H/2+65);
+  cx.restore();
+}
+
+function resolveFielding(m) {
+  const pos = m.field.meterPos;
+  const inGreen = pos > 0.35 && pos < 0.65;
+  const inGold = pos > 0.42 && pos < 0.58;
+  m.field.active = false;
+  if (inGold || (inGreen && Math.random()<0.7)) {
+    addWicket(m);
+    Audio.wicket();
+    G.runResultText = m.field.type==='catch' ? 'CAUGHT! 🎯' : 'RUN OUT! 🎯';
+    G.runResultColor = '#22c55e';
+    G.runResultTimer = 140;
+    Voice.play('Kamaal catch/run-out! Wicket!','hype');
+    CoachWasay.getLine('six');
+  } else {
+    Audio.bat(0.3);
+    G.runResultText = 'SAFE! 😅';
+    G.runResultColor = '#ff6b35';
+    G.runResultTimer = 100;
+    Voice.play('Chhoot gaya!','funny');
+  }
+  setTimeout(() => {
+    if (G.state===STATES.FIRST_INNINGS||G.state===STATES.SECOND_INNINGS) startNextDelivery(m);
+  }, 1000);
+}
+
+// ─── STATE: INNINGS BREAK ─────────────────────────────────────────
+function renderInningsBreak() {
+  cx.fillStyle = '#060612';
+  cx.fillRect(0,0,BASE_W,BASE_H);
+  drawHomeParticles();
+
+  const m = G.matchData;
+  const i1 = m.innings[0];
+
+  LogoSystem.draw(BASE_W/2, BASE_H*0.18, 180, 1, 12);
+
+  cx.font = 'bold 30px "Arial Black"';
+  cx.textAlign = 'center';
+  cx.fillStyle = '#FFD700';
+  cx.shadowColor='#FFD700'; cx.shadowBlur=15;
+  cx.fillText('INNINGS BREAK', BASE_W/2, BASE_H*0.38);
+  cx.shadowBlur=0;
+
+  cx.font = 'bold 20px Arial';
+  cx.fillStyle = '#fff';
+  cx.fillText(`1st Innings Score: ${i1.runs} / ${i1.wickets}`, BASE_W/2, BASE_H*0.47);
+  cx.fillText(`Overs: ${i1.overs}.${i1.balls}`, BASE_W/2, BASE_H*0.53);
+
+  cx.font = 'bold 24px Arial';
+  cx.fillStyle = '#FFD700';
+  cx.shadowColor='#FFD700'; cx.shadowBlur=10;
+  cx.fillText(`TARGET: ${m.target} RUNS`, BASE_W/2, BASE_H*0.63);
+  cx.shadowBlur=0;
+
+  const playerTeam = m.playerBatFirst ? m.playerTeamName : m.oppTeamName;
+  const chasingTeam = m.playerBatFirst ? m.oppTeamName : m.playerTeamName;
+  cx.font = '16px Arial';
+  cx.fillStyle = '#aaa';
+  cx.fillText(`${chasingTeam} needs ${m.target} to win`, BASE_W/2, BASE_H*0.7);
+
+  CoachWasay.render(BASE_W-220, BASE_H*0.55, 200, 180);
+  G.coachMsg = CoachWasay.getLine('pressure_chase');
+
+  G.buttons = [makeBtn('START 2ND INNINGS ▶', BASE_W/2-130, BASE_H*0.82, 260, 48, () => {
+    G.state = STATES.SECOND_INNINGS;
+    m.currentInnings = 1;
+    startNextDelivery(m);
+    Voice.play(`Second innings! Target ${m.target} runs!`,'hype');
+    Audio.transition();
+  }, '#FFD700', '#000')];
+  G.buttons.forEach(renderBtn);
+  checkBtns();
+}
+
+// ─── STATE: RESULT ────────────────────────────────────────────────
+function renderResult() {
+  const rd = G.resultData;
+  if (!rd) return;
+  const won = rd.result.winner === 'player';
+  const m = rd.matchData;
+
+  cx.fillStyle = '#000';
+  cx.fillRect(0,0,BASE_W,BASE_H);
+
+  // Gradient
+  const bgG = cx.createRadialGradient(BASE_W/2,BASE_H/2,0,BASE_W/2,BASE_H/2,700);
+  bgG.addColorStop(0, won?'rgba(34,197,94,0.15)':'rgba(220,38,38,0.15)');
+  bgG.addColorStop(1,'#000');
+  cx.fillStyle=bgG; cx.fillRect(0,0,BASE_W,BASE_H);
+
+  drawHomeParticles();
+  Particles.render();
+
+  LogoSystem.draw(BASE_W/2, BASE_H*0.13, 220, 1, won?25:8);
+
+  // Result text
+  cx.font = 'bold 58px "Arial Black"';
+  cx.textAlign='center';
+  cx.fillStyle = won?'#22c55e':'#ff4444';
+  cx.shadowColor=cx.fillStyle; cx.shadowBlur=30;
+  cx.fillText(won?'JEET GAYE! 🏆':'HAAR GAYE 😔', BASE_W/2, BASE_H*0.37);
+  cx.shadowBlur=0;
+
+  if (rd.result.type==='tie') {
+    cx.fillStyle='#FFD700'; cx.font='bold 40px Arial';
+    cx.fillText('BARABAR MATCH!', BASE_W/2, BASE_H*0.37);
+  }
+
+  // Score summary
+  const i1=m.innings[0], i2=m.innings[1];
+  cx.font='bold 22px Arial';
+  cx.fillStyle='#fff';
+  cx.fillText(`${m.playerTeamName}: ${i1.runs}/${i1.wickets} vs ${m.oppTeamName}: ${i2.runs}/${i2.wickets}`, BASE_W/2, BASE_H*0.46);
+
+  cx.font='18px Arial';
+  cx.fillStyle='#aaa';
+  const marginText = rd.result.type==='tie'?'Match tied!':
+    won ? `Won by ${rd.result.margin} ${rd.result.type}` : `Lost by ${rd.result.margin} ${rd.result.type}`;
+  cx.fillText(marginText, BASE_W/2, BASE_H*0.52);
+
+  // XP
+  cx.font='bold 20px Arial';
+  cx.fillStyle='#FFD700';
+  cx.fillText(`+${rd.xpGained} XP  |  Level: ${G.level}`, BASE_W/2, BASE_H*0.60);
+
+  // XP bar
+  const xpMax = G.level * 200;
+  const xpPct = Math.min(1, G.xp / xpMax);
+  const barX=BASE_W/2-200, barY=BASE_H*0.63;
+  cx.fillStyle='#333';
+  cx.beginPath(); cx.roundRect(barX,barY,400,16,8); cx.fill();
+  const xpGrd=cx.createLinearGradient(barX,barY,barX+400,barY);
+  xpGrd.addColorStop(0,'#FFD700'); xpGrd.addColorStop(1,'#ff9500');
+  cx.fillStyle=xpGrd;
+  cx.beginPath(); cx.roundRect(barX,barY,400*xpPct,16,8); cx.fill();
+  cx.font='11px Arial'; cx.fillStyle='#aaa';
+  cx.fillText(`XP: ${G.xp} / ${xpMax}`, BASE_W/2, barY+30);
+
+  // Next match or tournament complete
+  const nextOpp = getNextOpponent();
+  G.buttons = [];
+  if (nextOpp) {
+    G.buttons.push(makeBtn('NEXT MATCH ▶', BASE_W/2-140, BASE_H*0.75, 280, 50, () => {
+      setupMatchIntro();
+      G.state = STATES.MATCH_INTRO;
+      Audio.transition();
+    }, won?'#22c55e':'#FFD700', '#000'));
+  } else {
+    // All matches played
+    if (G.tournamentData && G.tournamentData.playerWins > G.tournamentData.playerLosses) {
+      G.vehairiUnlocked = true;
+      G.buttons.push(makeBtn('TOURNAMENT COMPLETE! 🏆', BASE_W/2-160, BASE_H*0.75, 320, 50, () => {
+        G.state = STATES.TOURNAMENT_COMPLETE;
+        Audio.reveal();
+      }, '#FFD700', '#000'));
+    } else {
+      G.buttons.push(makeBtn('MAIN MENU', BASE_W/2-100, BASE_H*0.75, 200, 50, () => {
+        G.state = STATES.HOME; Audio.transition();
+      }, '#333333', '#ffffff'));
+    }
+  }
+  G.buttons.push(makeBtn('MAIN MENU', BASE_W/2-100, BASE_H*0.86, 200, 40, () => {
+    G.state = STATES.HOME; Audio.transition();
+  }, '#333333', '#cccccc'));
+  G.buttons.forEach(renderBtn);
+  checkBtns();
+}
+
+// ─── STATE: TOURNAMENT COMPLETE / WASAY REVEAL ───────────────────
+function renderTournamentComplete() {
+  G.wasayRevealTimer += G.dt;
+  const t = G.wasayRevealTimer;
+
+  cx.fillStyle = '#000';
+  cx.fillRect(0,0,BASE_W,BASE_H);
+
+  if (t < 2000) {
+    // Silence phase
+    cx.fillStyle = `rgba(0,0,0,${1-t/2000})`;
+    cx.fillRect(0,0,BASE_W,BASE_H);
+    if (t > 500) {
+      cx.font = 'bold 22px Arial';
+      cx.textAlign='center';
+      cx.fillStyle = `rgba(255,255,255,${(t-500)/1500*0.6})`;
+      cx.fillText('...', BASE_W/2, BASE_H/2);
+    }
+  } else if (t < 4000) {
+    // Empty dugout + footsteps
+    const p = (t-2000)/2000;
+    cx.fillStyle = '#0a0a0a'; cx.fillRect(0,0,BASE_W,BASE_H);
+    // Dugout bench
+    cx.fillStyle = '#1a1a1a';
+    cx.fillRect(BASE_W*0.2, BASE_H*0.55, BASE_W*0.6, BASE_H*0.12);
+    cx.fillStyle = '#333';
+    cx.fillRect(BASE_W*0.2, BASE_H*0.52, BASE_W*0.6, BASE_H*0.03);
+    cx.font = 'italic 18px Arial';
+    cx.fillStyle = `rgba(150,150,150,${Math.min(1,p)})`;
+    cx.textAlign='center';
+    cx.fillText('An empty dugout...', BASE_W/2, BASE_H*0.4);
+    // Footstep sound
+    if (p > 0.3 && !G._footstepPlayed) {
+      G._footstepPlayed = true;
+      [0,300,600,900].forEach(delay => setTimeout(()=>Audio.click(), delay));
+    }
+    if (p > 0.5) {
+      cx.font = 'italic 16px Arial';
+      cx.fillStyle = `rgba(150,150,150,${(p-0.5)*2})`;
+      cx.fillText('...footsteps approach...', BASE_W/2, BASE_H*0.46);
+    }
+  } else if (t < 7000) {
+    // Gold particles + reveal
+    const p = (t-4000)/3000;
+    cx.fillStyle = '#000'; cx.fillRect(0,0,BASE_W,BASE_H);
+
+    // Gold particles
+    if (p > 0.1 && Math.random()<0.4) Particles.spawnGold(BASE_W/2+(Math.random()-0.5)*200, BASE_H/2+(Math.random()-0.5)*100, 3);
+    Particles.render();
+
+    // Crowd whisper text
+    cx.font = '14px Arial';
+    cx.textAlign='center';
+    cx.fillStyle = `rgba(200,200,200,${Math.min(1,p*3)})`;
+    cx.fillText('"BADSHAH... BADSHAH hai woh..."', BASE_W/2, BASE_H*0.35);
+
+    // Shadowy figure walking in
+    if (p > 0.3) {
+      const figureX = lerp(BASE_W*0.2, BASE_W/2, Math.min(1,(p-0.3)/0.5));
+      const figureAlpha = Math.min(1, (p-0.3)/0.3);
+      cx.save();
+      cx.globalAlpha = figureAlpha * 0.4;
+      // Silhouette
+      cx.fillStyle = '#1a1a2e';
+      cx.beginPath(); cx.arc(figureX, BASE_H*0.47, 38, 0, Math.PI*2); cx.fill();
+      cx.beginPath(); cx.roundRect(figureX-28, BASE_H*0.5, 56, 80, 4); cx.fill();
+      cx.restore();
+    }
+
+    if (p > 0.8) {
+      cx.font = 'bold 42px "Arial Black"';
+      cx.textAlign='center';
+      cx.fillStyle = `rgba(255,215,0,${(p-0.8)*5})`;
+      cx.shadowColor='#FFD700'; cx.shadowBlur=40;
+      cx.fillText('SHAIKH WASAY', BASE_W/2, BASE_H*0.72);
+      cx.shadowBlur=0;
+      cx.font = 'bold 20px Arial';
+      cx.fillStyle = `rgba(200,164,0,${(p-0.8)*5})`;
+      cx.fillText('THE REAL BADSHAH', BASE_W/2, BASE_H*0.79);
+    }
+  } else {
+    // Full reveal
+    cx.fillStyle = '#000'; cx.fillRect(0,0,BASE_W,BASE_H);
+    const bgR = cx.createRadialGradient(BASE_W/2,BASE_H/2,0,BASE_W/2,BASE_H/2,500);
+    bgR.addColorStop(0,'rgba(255,215,0,0.1)'); bgR.addColorStop(1,'#000');
+    cx.fillStyle=bgR; cx.fillRect(0,0,BASE_W,BASE_H);
+
+    Particles.spawnGold(BASE_W/2+(Math.random()-0.5)*300, BASE_H/2+(Math.random()-0.5)*200, 2);
+    Particles.render();
+
+    LogoSystem.draw(BASE_W/2, BASE_H*0.18, 260, 1, 30+15*Math.sin(G.t*0.003));
+
+    // Wasay character (large portrait)
+    const wx = BASE_W/2;
+    cx.fillStyle = '#FFD700';
+    cx.beginPath(); cx.arc(wx, BASE_H*0.44, 55, 0, Math.PI*2); cx.fill();
+    cx.fillStyle = '#c68642';
+    cx.beginPath(); cx.arc(wx, BASE_H*0.44, 48, 0, Math.PI*2); cx.fill();
+    // Crown
+    cx.fillStyle = '#FFD700';
+    cx.beginPath();
+    cx.moveTo(wx-42, BASE_H*0.44-48);
+    cx.lineTo(wx-28, BASE_H*0.44-70);
+    cx.lineTo(wx, BASE_H*0.44-80);
+    cx.lineTo(wx+28, BASE_H*0.44-70);
+    cx.lineTo(wx+42, BASE_H*0.44-48);
+    cx.closePath(); cx.fill();
+    cx.shadowColor='#FFD700'; cx.shadowBlur=25;
+    cx.fillStyle='#1a1a2e';
+    cx.beginPath(); cx.roundRect(wx-55, BASE_H*0.54, 110, 90, 4); cx.fill();
+    cx.shadowBlur=0;
+
+    cx.font = 'bold 44px "Arial Black"';
+    cx.textAlign='center';
+    cx.fillStyle = '#FFD700';
+    cx.shadowColor='#FFD700'; cx.shadowBlur=25;
+    cx.fillText('SHAIKH WASAY', BASE_W/2, BASE_H*0.73);
+    cx.shadowBlur=0;
+    cx.font = 'bold 22px Arial';
+    cx.fillStyle = '#C8A400';
+    cx.fillText('THE REAL BADSHAH', BASE_W/2, BASE_H*0.79);
+
+    // Voice line
+    if (!G._wasayLineSpoken) {
+      G._wasayLineSpoken = true;
+      setTimeout(() => Voice.play("Theek hai... ab tum tayyar ho.", 'dramatic'), 500);
+      Audio.reveal();
+    }
+
+    cx.font = 'italic 18px "Segoe UI"';
+    cx.fillStyle = 'rgba(255,215,0,0.8)';
+    cx.fillText('"Theek hai... ab tum tayyar ho."', BASE_W/2, BASE_H*0.85);
+
+    G.buttons = [makeBtn('UNLOCK VEHARI CHAMPIONSHIP 🏆', BASE_W/2-180, BASE_H*0.9, 360, 50, () => {
+      G.vehairiUnlocked = true;
+      G.wasayRevealed = true;
+      G.state = STATES.HOME;
+      Audio.transition();
+    }, '#FFD700', '#000')];
+    G.buttons.forEach(renderBtn);
+    checkBtns();
+  }
+}
+
+// ─── STATE MACHINE ────────────────────────────────────────────────
+function setCharSelectButtons() {
+  G.state = STATES.CHARACTER_SELECT;
+}
+
+function updateAndRender(timestamp) {
+  G.dt = Math.min(timestamp - G.t, 50);
+  G.t = timestamp;
+  // NOTE: G.mouse.clicked is NOT cleared here — it's cleared after rendering
+  // so that checkBtns() can detect the click in this same frame.
+
+  updateHomeParticles();
+  Particles.update(G.dt);
+  if (G.coachTimer > 0) G.coachTimer -= G.dt;
+  G.logoAlpha = Math.min(1, G.logoAlpha + G.dt * 0.001);
+
+  cx.clearRect(0,0,BASE_W,BASE_H);
+
+  switch(G.state) {
+    case STATES.HOME:              renderHome(); break;
+    case STATES.SETUP:
+    case STATES.CHARACTER_SELECT:  renderCharSelect(); break;
+    case STATES.PERMISSION_SCENE:  renderPermissionScene(); break;
+    case STATES.MATCH_INTRO:       renderMatchIntro(); break;
+    case STATES.TOSS:              renderToss(); break;
+    case STATES.FIRST_INNINGS:
+    case STATES.SECOND_INNINGS:    renderMatch(G.state); break;
+    case STATES.INNINGS_BREAK:     renderInningsBreak(); break;
+    case STATES.RESULT:            renderResult(); break;
+    case STATES.REWARD:            renderResult(); break;
+    case STATES.TOURNAMENT_COMPLETE: renderTournamentComplete(); break;
+    case STATES.VEHARI_MODE:       renderVehari(); break;
+  }
+
+  // Clear click AFTER rendering so all button checks in this frame can see it
+  G.mouse.clicked = false;
+
+  requestAnimationFrame(updateAndRender);
+}
+
+// ─── VEHARI MODE ─────────────────────────────────────────────────
+function renderVehari() {
+  cx.fillStyle = '#0a0a1e'; cx.fillRect(0,0,BASE_W,BASE_H);
+  drawHomeParticles();
+
+  LogoSystem.draw(BASE_W/2, BASE_H*0.15, 200, 1, 18);
+  cx.font = 'bold 30px "Arial Black"';
+  cx.textAlign='center';
+  cx.fillStyle='#FFD700';
+  cx.shadowColor='#FFD700'; cx.shadowBlur=15;
+  cx.fillText('VEHARI CITY CHAMPIONSHIP', BASE_W/2, BASE_H*0.3);
+  cx.shadowBlur=0;
+
+  cx.font = '15px Arial';
+  cx.fillStyle='#aaa';
+  cx.fillText('Face the best teams in Vehari!', BASE_W/2, BASE_H*0.35);
+
+  const teams = VEHARI_TEAMS.filter(t=>!t.isPlayer);
+  const cols=3, cardW=280, cardH=70, gap=18;
+  const totalW=cols*(cardW+gap)-gap;
+  const sx=(BASE_W-totalW)/2, sy=BASE_H*0.39;
+  teams.forEach((t,i) => {
+    const col=i%cols, row=Math.floor(i/cols);
+    const tx=sx+col*(cardW+gap), ty=sy+row*(cardH+gap);
+    const final = t.isFinal;
+    cx.fillStyle = final?'rgba(255,215,0,0.15)':'rgba(20,20,40,0.9)';
+    cx.beginPath(); cx.roundRect(tx,ty,cardW,cardH,8); cx.fill();
+    cx.strokeStyle=final?'#FFD700':'rgba(255,255,255,0.15)';
+    cx.lineWidth=final?2:1; cx.stroke();
+    if (final) { cx.strokeStyle='#FFD700'; cx.lineWidth=2.5; cx.shadowColor='#FFD700'; cx.shadowBlur=10; cx.stroke(); cx.shadowBlur=0; }
+    // Color dot
+    cx.fillStyle=t.color;
+    cx.beginPath(); cx.arc(tx+20,ty+35,12,0,Math.PI*2); cx.fill();
+    // Name
+    cx.font=`bold ${final?15:14}px Arial`;
+    cx.textAlign='left';
+    cx.fillStyle=final?'#FFD700':'#fff';
+    cx.fillText(t.name, tx+40, ty+28);
+    cx.font='12px Arial';
+    cx.fillStyle='#888';
+    cx.fillText(`Skill: ${t.skill}`, tx+40, ty+48);
+    if (final) { cx.font='bold 11px Arial'; cx.fillStyle='#FFD700'; cx.fillText('⚜ FINAL BOSS', tx+40+120, ty+48); }
+  });
+
+  G.buttons = [
+    makeBtn('START VEHARI TOURNAMENT ▶', BASE_W/2-160, BASE_H*0.87, 320, 50, () => {
+      initTournament('vehari');
+      G.state = STATES.CHARACTER_SELECT;
+      Audio.transition();
+    }, '#FFD700','#000'),
+    makeBtn('◀ Back', 20, 20, 100, 34, () => { G.state=STATES.HOME; }, '#333','#ccc')
+  ];
+  G.buttons.forEach(renderBtn);
+  checkBtns();
+}
+
+// ─── INPUT HANDLING ──────────────────────────────────────────────
+function getCanvasPos(e) {
+  const rect = gc.getBoundingClientRect();
+  const rawX = (e.clientX||e.touches?.[0]?.clientX||0) - rect.left;
+  const rawY = (e.clientY||e.touches?.[0]?.clientY||0) - rect.top;
+  return {
+    x: rawX * (BASE_W / rect.width),
+    y: rawY * (BASE_H / rect.height)
+  };
+}
+
+gc.addEventListener('mousemove', e => {
+  const pos = getCanvasPos(e);
+  G.mouse.x = pos.x; G.mouse.y = pos.y;
+});
+
+gc.addEventListener('mousedown', e => {
+  const pos = getCanvasPos(e);
+  G.mouse.x = pos.x; G.mouse.y = pos.y;
+  G.mouse.down = true;
+  Audio.init();
+  Audio.resume();
+});
+
+gc.addEventListener('mouseup', e => {
+  const pos = getCanvasPos(e);
+  G.mouse.x = pos.x; G.mouse.y = pos.y;
+  G.mouse.down = false;
+  G.mouse.clicked = true;
+
+  // Fielding click
+  const m = G.matchData;
+  if (m && m.field.active) {
+    resolveFielding(m);
+    G.mouse.clicked = false;
+  }
+});
+
+gc.addEventListener('touchstart', e => {
+  e.preventDefault();
+  const pos = getCanvasPos(e);
+  G.mouse.x = pos.x; G.mouse.y = pos.y;
+  G.mouse.down = true;
+  Audio.init();
+  Audio.resume();
+});
+
+gc.addEventListener('touchend', e => {
+  e.preventDefault();
+  G.mouse.down = false;
+  G.mouse.clicked = true;
+});
+
+document.addEventListener('keydown', e => {
+  G.keys[e.code] = true;
+  Audio.init();
+  Audio.resume();
+  const m = G.matchData;
+
+  // SPACE - bat swing
+  if (e.code === 'Space') {
+    e.preventDefault();
+    if (m && m.phase === 'batting' && m.bat.canSwing && !m.bat.swingResult) {
+      const timing = calcTiming(m.bat);
+      const runs = playerBatResult(timing, m.bat.shotDir, G.selectedChar);
+      Audio.bat(timing==='PERFECT'?0.9:timing==='GOOD'?0.65:timing==='OKAY'?0.4:0.1);
+      processBatResult(m, runs);
+    }
+  }
+  // Q/E - shot direction
+  if (e.code === 'KeyQ' && m && m.phase==='batting') { m.bat.shotDir = (m.bat.shotDir-1+6)%6; }
+  if (e.code === 'KeyE' && m && m.phase==='batting') { m.bat.shotDir = (m.bat.shotDir+1)%6; }
+
+  // 1-6 delivery keys (bowling)
+  if (m && m.phase==='bowling' && m.bowl.phase==='select') {
+    const num = parseInt(e.key);
+    if (num >= 1 && num <= 6) {
+      m.bowl.selectedType = num-1;
+      m.bowl.phase = 'aim';
+      m.bowl.aimX = BASE_W*0.38;
+      m.bowl.aimY = BASE_H/2-10;
+      Audio.click();
+    }
+  }
+  // ENTER - bowl
+  if (e.code === 'Enter' && m && m.phase==='bowling' && m.bowl.phase==='aim') {
+    m.bowl.phase = 'delivering';
+    m.bowl.deliveryProgress = 0;
+    m.bowl.aiDecision = null;
+    Audio.bat(0.3);
+  }
+});
+
+document.addEventListener('keyup', e => { delete G.keys[e.code]; });
+
+// ─── INITIALIZATION ───────────────────────────────────────────────
+initHomeParticles();
+tossPhase = 'waiting';
+tossCoinAngle = 0;
+tossCoinY = BASE_H/2 - 100;
+
+// Start game loop
+requestAnimationFrame(updateAndRender);
+
+// Preload voice system
+if (window.speechSynthesis) {
+  window.speechSynthesis.getVoices();
+  window.speechSynthesis.addEventListener('voiceschanged', () => {
+    window.speechSynthesis.getVoices();
+  });
+}
+
+// Welcome message (delayed for voice load)
+setTimeout(() => {
+  Voice.play("Gully Badshah mein aapka swagat hai! Ek nayi kahani shuru hone wali hai.", 'hype');
+}, 1200);
+
+</script>
+</body>
+</html>
