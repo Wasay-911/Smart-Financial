@@ -316,13 +316,13 @@
 
   // ── Initialise ───────────────────────────────────────────────────────────
   function init() {
-    snake        = [{ x: 10, y: 10 }, { x: 9, y: 10 }, { x: 8, y: 10 }];
+    snake        = [{ x: 5, y: 10 }, { x: 4, y: 10 }, { x: 3, y: 10 }];
     dir          = DIRS.RIGHT;
     nextDir      = DIRS.RIGHT;
     score        = 0;
     level        = 1;
     ticks        = 0;
-    paused       = false;
+    paused       = true; // Start paused
     gameOver     = false;
     specialFood  = null;
     specialTimer = 0;
