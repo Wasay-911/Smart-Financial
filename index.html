@@ -1,0 +1,2540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>GULLY BADSHAH — Street Cricket RPG</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{width:100vw;height:100vh;overflow:hidden;background:#000;}
+body{display:flex;align-items:center;justify-content:center;}
+#gc{display:block;touch-action:none;}
+#sub{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);
+  background:rgba(0,0,0,.93);color:#FFD700;padding:9px 22px;border-radius:22px;
+  font-size:14px;display:none;text-align:center;border:1px solid rgba(255,215,0,.5);
+  font-family:'Segoe UI',Arial,sans-serif;max-width:640px;z-index:20;
+  pointer-events:none;line-height:1.5;white-space:pre-wrap;}
+</style>
+</head>
+<body>
+<canvas id="gc"></canvas>
+<div id="sub"></div>
+<script>
+'use strict';
+// ══════════════════════════════════════════════════════════════════════
+//  GULLY BADSHAH  v2.0 — Street Cricket RPG
+//  Full visual rewrite: 3/4 perspective pitch · 6 venues · animated
+//  characters · shot fan · ball bounce physics · real Wasay image
+// ══════════════════════════════════════════════════════════════════════
+
+const gc = document.getElementById('gc');
+const cx = gc.getContext('2d');
+const SUB = document.getElementById('sub');
+const BW = 1280, BH = 720;  // base (logical) canvas size
+
+function resize(){
+  const ar = BW/BH, vw = innerWidth, vh = innerHeight;
+  let cw = vw, ch = vh;
+  if(vw/vh > ar) cw = vh*ar; else ch = vw/ar;
+  gc.width = BW; gc.height = BH;
+  gc.style.width = cw+'px'; gc.style.height = ch+'px';
+}
+resize(); addEventListener('resize', resize);
+
+// ── STATES ─────────────────────────────────────────────────────────────
+const S = {
+  HOME:'HOME', CHAR_SELECT:'CHAR_SELECT', PERMISSION:'PERMISSION',
+  INTRO:'INTRO', TOSS:'TOSS', BATTING:'BATTING', BOWLING:'BOWLING',
+  FIELDING:'FIELDING', OVER_BREAK:'OVER_BREAK', INN_BREAK:'INN_BREAK',
+  RESULT:'RESULT', TOURNAMENT:'TOURNAMENT', WASAY_REVEAL:'WASAY_REVEAL',
+  VEHARI:'VEHARI'
+};
+
+// ── GLOBAL ─────────────────────────────────────────────────────────────
+const G = {
+  state: S.HOME, prev: null, t:0, dt:0,
+  selectedChar: null,
+  xp:0, level:1, coins:0,
+  vehairiUnlocked: false, wasayRevealed: false,
+  tournament: null, matchMode:'tournament',
+  match: null,
+  permLine:0, permTimer:0,
+  introTimer:0,
+  overBreakData:null, overBreakTimer:0,
+  eventActive:false, eventData:null, eventTimer:0,
+  resultData:null,
+  wasayTimer:0, wasayPhase:0, _wsSpoken:false, _wpFoot:false,
+  particles:[], homeStars:[],
+  btns:[], mouse:{x:0,y:0,down:false,clicked:false},
+  keys:{},
+  runFlash:{text:'',color:'#FFD700',timer:0},
+  timingFlash:{text:'',color:'#FFD700',timer:0},
+  badshah:{active:false,timer:0},
+  showHelp:false,
+  logoImg:null, logoLoaded:false, logoFailed:false, logoAlpha:0,
+  wasayImg:null, wasayImgLoaded:false, wasayImgFailed:false,
+  currentVenue:0,
+  tossCoin:{angle:0, phase:'wait', flipTimer:0, choice:null, result:null},
+  tossPlayerWon: false,
+};
+
+// ── ASSETS ─────────────────────────────────────────────────────────────
+(()=>{
+  const logo = new Image();
+  logo.crossOrigin = 'anonymous';
+  logo.onload  = ()=>{ G.logoLoaded=true; };
+  logo.onerror = ()=>{ G.logoFailed=true; };
+  logo.src = 'https://i.postimg.cc/9Q0SY872/Logo-Gully-Badshah.png';
+  G.logoImg = logo;
+
+  const wasay = new Image();
+  wasay.crossOrigin = 'anonymous';
+  wasay.onload  = ()=>{ G.wasayImgLoaded=true; };
+  wasay.onerror = ()=>{ G.wasayImgFailed=true; };
+  wasay.src = 'https://i.postimg.cc/4xHP3rcg/Confident-man-in-gray-suit.png';
+  G.wasayImg = wasay;
+})();
+
+// ── AUDIO ───────────────────────────────────────────────────────────────
+const Aud = (()=>{
+  let actx=null;
+  const init=()=>{
+    if(actx) return;
+    try{ actx=new(window.AudioContext||window.webkitAudioContext)(); }catch(e){}
+  };
+  const tone=(f,d,type='sine',vol=0.3,del=0)=>{
+    if(!actx)return;
+    const o=actx.createOscillator(), g=actx.createGain();
+    o.connect(g); g.connect(actx.destination);
+    o.type=type; o.frequency.value=f;
+    const t0=actx.currentTime+del;
+    g.gain.setValueAtTime(vol,t0);
+    g.gain.exponentialRampToValueAtTime(0.001,t0+d);
+    o.start(t0); o.stop(t0+d+0.05);
+  };
+  const noise=(d,vol=0.1)=>{
+    if(!actx)return;
+    const buf=actx.createBuffer(1,actx.sampleRate*d,actx.sampleRate);
+    const data=buf.getChannelData(0);
+    for(let i=0;i<data.length;i++) data[i]=Math.random()*2-1;
+    const src=actx.createBufferSource(), gn=actx.createGain();
+    const fl=actx.createBiquadFilter();
+    src.buffer=buf; src.connect(fl); fl.connect(gn); gn.connect(actx.destination);
+    fl.type='bandpass'; fl.frequency.value=700; fl.Q.value=0.5;
+    gn.gain.setValueAtTime(vol,actx.currentTime);
+    gn.gain.exponentialRampToValueAtTime(0.001,actx.currentTime+d);
+    src.start(); src.stop(actx.currentTime+d+0.05);
+  };
+  const crowd=(i=0.5)=>{
+    for(let n=0;n<5;n++) tone(60+Math.random()*80,0.4+Math.random()*0.3,'sawtooth',0.012*i,Math.random()*0.12);
+    noise(0.5,0.04*i);
+  };
+  return{
+    init, resume:()=>{ if(actx&&actx.state==='suspended') actx.resume(); },
+    click:()=>tone(900,0.05,'square',0.15),
+    bat:(p)=>{ tone(400+p*800,0.08+p*0.05,'square',0.4); tone(300+p*200,0.12,'triangle',0.25); noise(0.06+p*0.04,0.1+p*0.12); },
+    wicket:()=>{ tone(200,0.4,'sawtooth',0.5); tone(140,0.35,'square',0.3,0.08); noise(0.2,0.2); },
+    six:()=>{ [523,659,784,1047].forEach((f,i)=>tone(f,0.5,'sine',0.35,i*0.07)); crowd(1.0); },
+    four:()=>{ [440,554,659].forEach((f,i)=>tone(f,0.35,'sine',0.3,i*0.06)); crowd(0.7); },
+    crowd, cheer:()=>{ for(let i=0;i<10;i++) tone(300+Math.random()*500,0.25,'sine',0.02,Math.random()*0.3); noise(0.5,0.08); },
+    transition:()=>{ [220,330,440,550].forEach((f,i)=>tone(f,0.3,'sine',0.2,i*0.08)); },
+    reveal:()=>{ [110,165,220,330,440,660,880].forEach((f,i)=>tone(f,1.2,'sine',0.13,i*0.12)); tone(880,1.5,'triangle',0.28,0.9); noise(0.4,0.15); },
+    bounce:()=>tone(350,0.06,'sine',0.25),
+  };
+})();
+
+// ── VOICE ───────────────────────────────────────────────────────────────
+const Vox = (()=>{
+  const pitches={calm:1,aggressive:1.2,funny:0.9,hype:1.35,dramatic:0.8};
+  const rates={calm:0.9,aggressive:1.1,funny:1.0,hype:1.15,dramatic:0.85};
+  let enabled=true;
+  const show=(txt)=>{
+    SUB.textContent=txt; SUB.style.display='block';
+    clearTimeout(SUB._t);
+    SUB._t=setTimeout(()=>SUB.style.display='none', Math.max(2500,txt.length*55));
+  };
+  const play=(txt,tone='calm')=>{
+    show(txt);
+    if(!enabled||!window.speechSynthesis) return;
+    try{
+      speechSynthesis.cancel();
+      const u=new SpeechSynthesisUtterance(txt);
+      u.pitch=pitches[tone]||1; u.rate=rates[tone]||1; u.volume=0.85;
+      const vs=speechSynthesis.getVoices();
+      const v=vs.find(v=>v.lang.startsWith('ur')||v.lang.startsWith('hi'));
+      if(v) u.voice=v;
+      speechSynthesis.speak(u);
+    }catch(e){}
+  };
+  return{play, show, toggle:()=>enabled=!enabled};
+})();
+
+// ── PARTICLES ───────────────────────────────────────────────────────────
+const Ptcl = {
+  list:[],
+  spawn(x,y,color='#FFD700',count=20,speed=3){
+    for(let i=0;i<count;i++){
+      const a=Math.random()*Math.PI*2, sp=0.5+Math.random()*speed;
+      this.list.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp-Math.random()*2,
+        life:1,decay:0.015+Math.random()*0.02,size:2+Math.random()*5,color,
+        gravity:0.04+Math.random()*0.04});
+    }
+  },
+  spawnGold(x,y,n=40){
+    ['#FFD700','#FFF200','#FF9500','#FFB700','#fff'].forEach(c=>this.spawn(x,y,c,Math.floor(n/5),4));
+  },
+  update(dt){ this.list=this.list.filter(p=>p.life>0); this.list.forEach(p=>{ p.x+=p.vx; p.y+=p.vy; p.vy+=p.gravity; p.life-=p.decay; }); },
+  render(){ this.list.forEach(p=>{ cx.save(); cx.globalAlpha=Math.max(0,p.life); cx.fillStyle=p.color; cx.beginPath(); cx.arc(p.x,p.y,p.size,0,Math.PI*2); cx.fill(); cx.restore(); }); }
+};
+
+// ── VENUES ──────────────────────────────────────────────────────────────
+const VENUES = [
+  { name:'Vehari Mohalla', sky:['#1a0533','#3d1063','#7c2d9e'],
+    horizon:['#c8442a','#ff6b35'], ground:'#2a6e1a', pitch:'#c4a24a',
+    crowd:'#4a2070', night:false, type:'street' },
+  { name:'Gali Cricket Ground', sky:['#0a2340','#1e4d7a','#2980b9'],
+    horizon:['#87ceeb','#b3e0f7'], ground:'#1e7a1e', pitch:'#d4b265',
+    crowd:'#1a3a6a', night:false, type:'gali' },
+  { name:'Open Maidan', sky:['#2d5016','#3d7a1e','#4a9a25'],
+    horizon:['#a8d060','#c8e870'], ground:'#228b22', pitch:'#c8a450',
+    crowd:'#2d5016', night:false, type:'open' },
+  { name:'Vehari Stadium', sky:['#060d1a','#0d1f3c','#1a3060'],
+    horizon:['#1a3060','#0d1f3c'], ground:'#1a5c1a', pitch:'#b89a38',
+    crowd:'#2a0a5a', night:true, type:'stadium' },
+  { name:'City Night Match', sky:['#000005','#05050f','#0a0a20'],
+    horizon:['#0a0a20','#000005'], ground:'#0f3d0f', pitch:'#a08828',
+    crowd:'#1a0033', night:true, type:'night' },
+  { name:'Tournament Final', sky:['#0a0010','#200040','#400080'],
+    horizon:['#600090','#800080'], ground:'#1a4a1a', pitch:'#c0a040',
+    crowd:'#400060', night:true, type:'final' },
+];
+
+// ── CHARACTERS ──────────────────────────────────────────────────────────
+const CHARS = [
+  { id:'babu',    name:'Babu Bhai',       role:'Power Hitter',      color:'#e63946', kitColor:'#c0392b', helmetColor:'#8b0000',
+    stats:{bat:90,bowl:55,field:60,spd:65,stam:75}, special:'Power Surge', desc:'Mohalle ka sabse bada hitter',
+    perm:["Ammi: Beta, kahan ja raha hai?","Babu Bhai: Mohalle mein cricket Ammi...","Abu: Theek hai, homework bhi karna.","Ammi: Aur haan... Badshah se bach ke rehna."] },
+  { id:'chhotu',  name:'Chhotu',          role:'Speed Runner',      color:'#06d6a0', kitColor:'#00a080', helmetColor:'#004d3a',
+    stats:{bat:70,bowl:65,field:90,spd:98,stam:85}, special:'Speed Dash', desc:'Bhaagna iski fitrat hai',
+    perm:["Bhai: Chhotu! Kahan bhag?","Chhotu: Cricket khelne bhai!","Dadi: Dhoop mein mat khelo.","Bhai: Aur sun... Badshah se bach ke rehna."] },
+  { id:'billa',   name:'Billa',           role:'Style Player',      color:'#a855f7', kitColor:'#7c3aed', helmetColor:'#4c1d95',
+    stats:{bat:80,bowl:75,field:70,spd:72,stam:68}, special:'Style Shot', desc:'Andaaz toh dekho yaaron',
+    perm:["Baba: Billa, cricket?","Billa: Ji Baba, style se khelunga.","Mama: Style se, dhyan bhi rakhna.","Baba: Badshah se bach ke rehna."] },
+  { id:'asad',    name:'Asad',            role:'Analytics',         color:'#3b82f6', kitColor:'#1d4ed8', helmetColor:'#1e3a8a',
+    stats:{bat:75,bowl:85,field:75,spd:68,stam:80}, special:'Tactical Vision', desc:'Dimagh se khelta hai',
+    perm:["Abbu: Padhai chhod ke cricket?","Asad: Game theory apply kar raha hun.","Ammi: Teri skills pe trust.","Abbu: Badshah se bach ke rehna."] },
+  { id:'chacha',  name:'Chacha Rasheed',  role:'1992 Legend',       color:'#c084fc', kitColor:'#9333ea', helmetColor:'#581c87',
+    stats:{bat:85,bowl:88,field:65,spd:55,stam:70}, special:'1992 Mode', desc:'1992 ka hero, aaj bhi champion',
+    perm:["Bhai: Chacha, aap bhi?","Chacha: 1992 mein khelya tha!","Bhabi: Dawa lena yaad se.","Bhai: Badshah se bach ke rehna."] },
+  { id:'sana',    name:'Sana',            role:'Timing Master',     color:'#f43f5e', kitColor:'#e11d48', helmetColor:'#9f1239',
+    stats:{bat:92,bowl:70,field:80,spd:78,stam:82}, special:'Perfect Timing', desc:'Perfect timing, koi nahi rok sakta',
+    perm:["Ammi: Cricket mein?","Sana: Timing master hun main.","Abu: Hosiyar rehna.","Ammi: Badshah se bach ke rehna."] },
+  { id:'rimsha',  name:'Rimsha',          role:'Mind Games',        color:'#06b6d4', kitColor:'#0891b2', helmetColor:'#164e63',
+    stats:{bat:78,bowl:88,field:76,spd:74,stam:78}, special:'Mind Trick', desc:'Dimagh se khiladi',
+    perm:["Papa: Ye pagalpan kab khatam?","Rimsha: Psychology seekh rahi hun.","Mama: Naaz hai.","Papa: Badshah se bach ke rehna."] },
+  { id:'zara',    name:'Zara',            role:'Aggressive Hitter', color:'#f97316', kitColor:'#ea580c', helmetColor:'#7c2d12',
+    stats:{bat:88,bowl:65,field:72,spd:80,stam:88}, special:'Aggressive Mode', desc:'Koi rukawat nahi',
+    perm:["Dadi: Cricket ladkon ka?","Zara: Main sabko dikha dungi!","Abbu: Kar sakti hai ye.","Dadi: Badshah se bach ke rehna."] },
+  { id:'hira',    name:'Hira',            role:'Speed Conversion',  color:'#10b981', kitColor:'#059669', helmetColor:'#064e3b',
+    stats:{bat:82,bowl:72,field:88,spd:92,stam:86}, special:'Speed Convert', desc:'Ek se do, do se chha',
+    perm:["Bhai: Teri training achi.","Hira: Speed hi meri strength.","Ammi: Kha ke jana.","Bhai: Badshah se bach ke rehna."] },
+  { id:'amma',    name:'Amma Zubeda',     role:'Unexpected Power',  color:'#eab308', kitColor:'#ca8a04', helmetColor:'#713f12',
+    stats:{bat:86,bowl:80,field:70,spd:65,stam:90}, special:'Amma Power', desc:'Mohalle ki asli rani',
+    perm:["Neighbour: Cricket Amma ji?","Amma: Maine bahut dekhi hai.","Neighbour: Par...","Amma: Mujhe darna nahi. Tum bach ke rehna."] },
+];
+
+// ── TOURNAMENT DATA ──────────────────────────────────────────────────────
+const MOHALLA_OPPS = [
+  {name:'Gali Boys',       color:'#e63946', skill:52, venueIdx:0},
+  {name:'Rooftop Kings',   color:'#f97316', skill:60, venueIdx:1},
+  {name:'Bazaar Ballers',  color:'#eab308', skill:65, venueIdx:2},
+  {name:'Mohalla Tigers',  color:'#22c55e', skill:70, venueIdx:0},
+  {name:'Park Street XI',  color:'#3b82f6', skill:73, venueIdx:1},
+];
+const VEHARI_OPPS = [
+  {name:'Vehari Central Tigers', color:'#ff6b35', skill:75, venueIdx:3},
+  {name:'College Road Kings',    color:'#a855f7', skill:78, venueIdx:3},
+  {name:'Satellite Strikers',    color:'#06b6d4', skill:80, venueIdx:4},
+  {name:'Model Town Warriors',   color:'#22c55e', skill:82, venueIdx:4},
+  {name:'City Lions',            color:'#f43f5e', skill:85, venueIdx:5},
+  {name:'Vehari All Stars',      color:'#eab308', skill:88, venueIdx:5},
+  {name:'LEGEND ALL-STARS',      color:'#FFD700', skill:96, venueIdx:5, isFinal:true},
+];
+
+// ── COMMENTARY ───────────────────────────────────────────────────────────
+const CMT = {
+  six:["CHHA! Uss ne toh asmaan cheer diya!","SIX! Ek dum BADSHAH shot!","MAIDAN SE BAHAR! Ye toh limit cross kar gayi!","Wo dekho — six! Sab khush hain!"],
+  four:["CHAR! Boundary par pahuch gaya!","FOUR! Fielder ne haath bhi nahi diya!","Beautiful shot! Seedha boundary!","Sher wali shot! FOUR!"],
+  wicket:["WICKET! OUT HO GAYA!","Aa gayi stumps mein! Khatam!","OUT! Game ne rung badla!","Wicket gira! Match interesting!"],
+  dot:["Dot ball. Pressure badh raha hai.","Koi run nahi. Defense solid.","Tight delivery. Batsman defend kar gaya.","Excellent bowling! Dot ball!"],
+  1:["Single liya. Chalaak batsman.","Ek run. Strike badal gayi.","Single! Acha running."],
+  2:["Do run! Running excellent!","Do run ki daud!","Two runs! Sahi tafteesh!"],
+  3:["Teen run! Zabardast daud!","Teeen run! Kitthe se takte ho bhai!"],
+  milestone50:["FIFTY! Kamaal hai!","Half century! Badshah ki innings!"],
+  milestone100:["CENTURY! SAUTAAA! LEGEND!","Ek sao! Mohalle ka BADSHAH!"],
+  pressure:["Pressure hai. Har ball matter karti.","Tight situation. Saanson mein aane laga!"],
+};
+const cmt=(t)=>{ const a=CMT[t]||CMT.dot; return a[Math.floor(Math.random()*a.length)]; };
+
+// ── MATCH LOGIC ──────────────────────────────────────────────────────────
+function mkMatch(playerName, oppName, overs, playerBatFirst){
+  return {
+    playerName, oppName, overs, playerBatFirst,
+    innings:[
+      {runs:0, wkts:0, ovrs:0, balls:0, hist:[], extras:0},
+      {runs:0, wkts:0, ovrs:0, balls:0, hist:[], extras:0}
+    ],
+    curInn:0, target:null,
+    lastCmt:'', cmt_t:0,
+    lastRuns:0, totalBalls:0, dotCount:0,
+    phase:'idle',  // idle | bat_delivery | bat_swing | bowl_select | bowl_aim | bowl_delivery | fielding | event
+    // batting state
+    bat:{
+      mAngle:0, mSpeed:2.2, sweetA:1.0, sweetW:0.5, goodW:1.3,
+      canSwing:false, ballIncoming:false, ballProg:0,
+      ballX:0, ballY:0, bounced:false, bounceY:0,
+      swingResult:null, swingTimer:0, swingText:'', swingColor:'#FFD700',
+      shotDir:0, delivType:'Normal', timingLabel:'',
+      swingAnim:0, stance:true,
+      trail:[],
+    },
+    // bowling state
+    bowl:{
+      phase:'select', selType:0,
+      aimX:430, aimY:490, aimLocked:false,
+      delivProg:0, aiResult:null, aiTimer:0,
+      ballX:430, ballY:300,
+    },
+    // fielding
+    fld:{ active:false, type:'catch', mPos:0.5, mDir:1, mSpd:0.013, timer:100, result:null, ballX:430, ballY:300, ballTX:430, ballTY:620, prog:0 },
+    // over break
+    overBreak:false,
+  };
+}
+
+function inn(m){ return m.innings[m.curInn]; }
+function playerBatting(m){ return m.playerBatFirst ? m.curInn===0 : m.curInn===1; }
+
+function nextBall(m){
+  const i=inn(m); i.balls++; m.totalBalls++;
+  if(i.balls>=6){ i.balls=0; i.ovrs++; }
+}
+function addRuns(m,r){ const i=inn(m); i.runs+=r; i.hist.push(r===0?'●':String(r)); if(r===0){m.dotCount++;} else m.dotCount=0; }
+function addWkt(m){ const i=inn(m); i.wkts++; i.hist.push('W'); m.dotCount=0; }
+
+function checkInnEnd(m){
+  const i=inn(m);
+  if(i.wkts>=10 || i.ovrs>=m.overs){
+    if(m.curInn===0){ m.target=i.runs+1; m.curInn=1; return 'inn_break'; }
+    else return 'match_over';
+  }
+  return null;
+}
+
+function matchResult(m){
+  const [i0,i1]=m.innings;
+  const p0=m.playerBatFirst?i0.runs:i1.runs;
+  const p1=m.playerBatFirst?i1.runs:i0.runs;
+  if(p0>p1) return {winner:'player',margin:p0-p1,type:'runs'};
+  if(p1>p0) return {winner:'opp',margin:p1-p0,type:'runs'};
+  return {winner:'tie',margin:0,type:'tie'};
+}
+
+// AI bat simulation
+function aiBat(delivType){
+  const skill=G.tournament ? G.tournament.schedule.find(s=>!s.played)?.opp?.skill||65 : 65;
+  const bonus={Yorker:-15,Bouncer:-10,Swing:-12,Spinner:-8,Googly:-20,Slower:-10,Normal:0}[delivType]||0;
+  const eff=skill+bonus, r=Math.random()*100;
+  if(r<10+(100-eff)*0.15) return 'W';
+  if(r<28) return '0';
+  if(r<52) return '1';
+  if(r<68) return '2';
+  if(r<80) return '3';
+  if(r<91) return '4';
+  return '6';
+}
+
+// Player bat result
+function playerBat(timing, char){
+  const b=(char?char.stats.bat:75) + (char?.special==='Perfect Timing'&&timing==='PERFECT'?12:0);
+  if(timing==='PERFECT'){
+    const r=Math.random()*100;
+    if(r<20+b*0.14) return 6; if(r<55) return 4; if(r<75) return 3; return 2;
+  } else if(timing==='GOOD'){
+    const r=Math.random()*100;
+    if(r<8+b*0.05) return 6; if(r<28) return 4; if(r<52) return 3; if(r<72) return 2; if(r<88) return 1; return 0;
+  } else if(timing==='OKAY'){
+    const r=Math.random()*100;
+    if(r<4) return 4; if(r<18) return 2; if(r<48) return 1; if(r<72) return 0; return 'W';
+  } else {
+    return Math.random()<0.55?'W':0;
+  }
+}
+
+function calcTiming(bat){
+  let diff=Math.abs(bat.mAngle%(Math.PI*2) - bat.sweetA%(Math.PI*2));
+  if(diff>Math.PI) diff=Math.PI*2-diff;
+  if(diff<bat.sweetW/2) return 'PERFECT';
+  if(diff<bat.goodW/2)  return 'GOOD';
+  if(diff<bat.goodW)    return 'OKAY';
+  return 'MISS';
+}
+
+function badshahFactor(timing){
+  const chance=0.03+G.level*0.004;
+  if(Math.random()<chance){
+    G.badshah={active:true,timer:90};
+    Ptcl.spawnGold(BW*0.38,BH/2-30,50); Aud.cheer();
+    Vox.play("BADSHAH FACTOR! Miracle shot!",'hype');
+    return 'PERFECT';
+  }
+  const char=G.selectedChar;
+  if(char?.special==='Perfect Timing'&&timing==='GOOD') return 'PERFECT';
+  if(char?.special==='Aggressive Mode'&&timing==='OKAY') return 'GOOD';
+  return timing;
+}
+
+// ── TOURNAMENT ───────────────────────────────────────────────────────────
+function initTournament(mode){
+  G.matchMode=mode;
+  const opps=(mode==='vehari'?VEHARI_OPPS:MOHALLA_OPPS).map(o=>({...o}));
+  G.tournament={ mode, opps, schedule:opps.map((o,i)=>({opp:o,idx:i,played:false,result:null})),
+    wins:0, losses:0, currentIdx:0 };
+}
+function nextOpp(){ const s=G.tournament?.schedule.find(s=>!s.played); return s||null; }
+
+// ── PERSPECTIVE HELPERS ──────────────────────────────────────────────────
+// Pitch goes from bottom (batsman, near) to top (bowler, far)
+// t=0 → batsman end, t=1 → bowler end
+const PITCH_CX = 430;
+const PITCH_NEAR_Y = 630, PITCH_FAR_Y = 275;
+const PITCH_NEAR_W = 148, PITCH_FAR_W = 52;
+
+function pitchInterp(t){
+  return {
+    x: PITCH_CX,
+    y: PITCH_NEAR_Y + (PITCH_FAR_Y - PITCH_NEAR_Y)*t,
+    w: PITCH_NEAR_W + (PITCH_FAR_W - PITCH_NEAR_W)*t,
+    scale: 1 - 0.58*t,
+  };
+}
+
+// Convert "pitch t" + "pitch side offset" to canvas x,y
+function pitchXY(t, sideOffset=0){
+  const p=pitchInterp(t);
+  return { x: p.x + sideOffset * p.w * 0.5, y: p.y, scale: p.scale };
+}
+
+// Ball world position during delivery
+function ballWorldPos(progress, delivType){
+  // progress: 0=bowler(t=1), 1=batsman(t=0)
+  const t = 1 - progress;
+  const p = pitchInterp(t);
+  let yOff = 0;
+  // Bounce at ~40% of the way
+  const bounce = delivType==='Bouncer'?0.28 : delivType==='Yorker'?0.72 : delivType==='Slower'?0.50 : 0.42;
+  if(progress < bounce){
+    // Descending arc
+    const tp = progress / bounce;
+    yOff = -Math.sin(tp * Math.PI * 0.5) * (delivType==='Bouncer'?90:delivType==='Spinner'?40:60) * p.scale;
+  } else {
+    // Rising after bounce
+    const tp = (progress - bounce) / (1 - bounce);
+    yOff = -Math.sin(tp * Math.PI) * (delivType==='Bouncer'?70:delivType==='Yorker'?15:50) * p.scale;
+  }
+  return { x: p.x, y: p.y + yOff, scale: p.scale, t };
+}
+
+// ── VENUE RENDERER ───────────────────────────────────────────────────────
+function drawVenue(venueIdx){
+  const v = VENUES[venueIdx];
+
+  // Sky
+  const skyGrd = cx.createLinearGradient(0,0,0,BH*0.6);
+  v.sky.forEach((c,i)=>skyGrd.addColorStop(i/(v.sky.length-1),c));
+  cx.fillStyle=skyGrd; cx.fillRect(0,0,BW*0.68,BH*0.88);
+
+  // Stars / floodlights for night venues
+  if(v.night){
+    for(let i=0;i<60;i++){
+      const sx=(((i*97)%430)+5), sy=(((i*63)%220)+10);
+      const alpha=0.4+0.6*Math.sin(G.t*0.002+i*0.7);
+      cx.fillStyle=`rgba(255,255,255,${alpha})`;
+      cx.beginPath(); cx.arc(sx,sy,0.8+Math.random()*1.2,0,Math.PI*2); cx.fill();
+    }
+    // Floodlight poles (stadium/night)
+    if(v.type==='stadium'||v.type==='night'||v.type==='final'){
+      [[80,280],[380,260],[760,270]].forEach(([px_,py_])=>{
+        cx.strokeStyle='#888'; cx.lineWidth=4;
+        cx.beginPath(); cx.moveTo(px_,BH*0.72); cx.lineTo(px_,py_); cx.stroke();
+        // Light glow
+        const lg=cx.createRadialGradient(px_,py_,0,px_,py_,80);
+        lg.addColorStop(0,'rgba(255,255,220,0.25)'); lg.addColorStop(1,'transparent');
+        cx.fillStyle=lg; cx.fillRect(px_-80,py_-20,160,100);
+        cx.fillStyle='#ffe'; cx.beginPath(); cx.arc(px_,py_,5,0,Math.PI*2); cx.fill();
+      });
+    }
+  } else {
+    // Clouds
+    [[80,80,60],[250,50,80],[420,90,50]].forEach(([cx_,cy_,r])=>{
+      cx.fillStyle='rgba(255,255,255,0.15)';
+      cx.beginPath(); cx.arc(cx_,cy_,r,0,Math.PI*2); cx.fill();
+      cx.beginPath(); cx.arc(cx_+50,cy_+10,r*0.8,0,Math.PI*2); cx.fill();
+    });
+  }
+
+  // Background buildings / scene
+  if(v.type==='street'||v.type==='gali'){
+    drawBuildings(v);
+  } else if(v.type==='stadium'||v.type==='night'||v.type==='final'){
+    drawStadiumStands(v);
+  } else {
+    drawTrees(v);
+  }
+
+  // Outfield (large green oval)
+  const og=cx.createRadialGradient(PITCH_CX,BH*0.62,40,PITCH_CX,BH*0.62,320);
+  og.addColorStop(0,v.ground+'ee'); og.addColorStop(1,v.ground+'88');
+  cx.fillStyle=og;
+  cx.beginPath();
+  cx.ellipse(PITCH_CX,BH*0.62,340,240,0,0,Math.PI*2);
+  cx.fill();
+
+  // Mowing stripes
+  for(let i=0;i<10;i++){
+    cx.fillStyle=i%2===0?'rgba(0,0,0,0.05)':'rgba(255,255,255,0.04)';
+    cx.beginPath();
+    cx.ellipse(PITCH_CX,BH*0.62,340-i*34,240-i*24,0,0,Math.PI*2);
+    if(i>0) cx.ellipse(PITCH_CX,BH*0.62,340-(i-1)*34,240-(i-1)*24,0,0,Math.PI*2);
+    cx.fill();
+  }
+
+  // Boundary rope
+  cx.strokeStyle='rgba(255,255,255,0.75)'; cx.lineWidth=2.5;
+  cx.setLineDash([10,5]);
+  cx.beginPath(); cx.ellipse(PITCH_CX,BH*0.62,330,232,0,0,Math.PI*2); cx.stroke();
+  cx.setLineDash([]);
+
+  // Sponsor boards along boundary
+  const sponsors=['GULLY BADSHAH','CHAI WALA','MOHALLA FRESH','CRICKET KING'];
+  sponsors.forEach((sp,i)=>{
+    const angle = (i/sponsors.length)*Math.PI + Math.PI*0.1;
+    const bx=PITCH_CX+Math.cos(angle)*310, by=BH*0.62+Math.sin(angle)*215;
+    cx.save();
+    cx.translate(bx,by); cx.rotate(angle+Math.PI/2);
+    cx.fillStyle='rgba(0,0,0,0.7)';
+    cx.beginPath(); cx.roundRect(-55,-10,110,22,4); cx.fill();
+    cx.fillStyle='#FFD700'; cx.font='bold 9px Arial'; cx.textAlign='center';
+    cx.fillText(sp, 0, 4);
+    cx.restore();
+  });
+}
+
+function drawBuildings(v){
+  const buildings=[[20,180,80],[100,140,60],[200,220,90],[320,160,70],[500,200,80],[620,170,65],[700,240,85]];
+  buildings.forEach(([bx,bh,bw])=>{
+    // Building
+    cx.fillStyle=v.type==='gali'?'#2a3545':'#3d2a1e';
+    cx.fillRect(bx,BH*0.55-bh,bw,bh+30);
+    // Windows
+    for(let r=0;r<3;r++) for(let c=0;c<3;c++){
+      const lit=Math.random()>0.4||v.night;
+      cx.fillStyle=lit?'rgba(255,230,100,0.7)':'rgba(50,50,80,0.5)';
+      cx.fillRect(bx+c*20+8,BH*0.55-bh+r*24+10,12,14);
+    }
+    // Roof
+    cx.fillStyle=v.type==='gali'?'#1a2535':'#2a1a0e';
+    cx.fillRect(bx-3,BH*0.55-bh-4,bw+6,8);
+  });
+}
+
+function drawStadiumStands(v){
+  // Curved stands behind boundary
+  const standGrd=cx.createLinearGradient(0,BH*0.18,0,BH*0.55);
+  standGrd.addColorStop(0,v.crowd+'cc'); standGrd.addColorStop(1,v.crowd+'44');
+  cx.fillStyle=standGrd;
+  cx.beginPath();
+  cx.moveTo(0,BH*0.55); cx.lineTo(0,BH*0.22);
+  cx.quadraticCurveTo(BW*0.34,BH*0.08,BW*0.68,BH*0.22);
+  cx.lineTo(BW*0.68,BH*0.55);
+  cx.closePath(); cx.fill();
+  // Crowd dots
+  for(let i=0;i<200;i++){
+    const angle=(i/200)*Math.PI+Math.PI*0.02;
+    const dist=180+Math.random()*60;
+    const px=PITCH_CX+Math.cos(angle)*dist;
+    const py=BH*0.48+Math.sin(angle)*0.4*dist-120;
+    if(py>BH*0.55) continue;
+    const colors=['#ff4444','#4444ff','#44ff44','#ffff44','#ff44ff','#ffffff','#ff8844'];
+    cx.fillStyle=colors[i%7]; cx.globalAlpha=0.6+0.4*Math.sin(G.t*0.001+i);
+    cx.beginPath(); cx.arc(px,py,3+Math.random(),0,Math.PI*2); cx.fill();
+    cx.globalAlpha=1;
+  }
+}
+
+function drawTrees(v){
+  [[40,BH*0.52],[150,BH*0.50],[680,BH*0.51],[760,BH*0.50]].forEach(([tx,ty])=>{
+    cx.fillStyle='#1a4a0a';
+    cx.beginPath(); cx.arc(tx,ty-40,35,0,Math.PI*2); cx.fill();
+    cx.beginPath(); cx.arc(tx-15,ty-20,25,0,Math.PI*2); cx.fill();
+    cx.beginPath(); cx.arc(tx+15,ty-25,28,0,Math.PI*2); cx.fill();
+    cx.fillStyle='#3d2010'; cx.fillRect(tx-6,ty-5,12,50);
+  });
+}
+
+// ── PITCH RENDERER ───────────────────────────────────────────────────────
+function drawPerspectivePitch(v){
+  // Pitch shadow
+  cx.fillStyle='rgba(0,0,0,0.2)';
+  cx.beginPath();
+  cx.moveTo(PITCH_CX - PITCH_NEAR_W/2 + 8, PITCH_NEAR_Y+6);
+  cx.lineTo(PITCH_CX + PITCH_NEAR_W/2 + 8, PITCH_NEAR_Y+6);
+  cx.lineTo(PITCH_CX + PITCH_FAR_W/2 + 6,  PITCH_FAR_Y+6);
+  cx.lineTo(PITCH_CX - PITCH_FAR_W/2 + 6,  PITCH_FAR_Y+6);
+  cx.closePath(); cx.fill();
+
+  // Pitch surface
+  const pitchGrd = cx.createLinearGradient(PITCH_CX-PITCH_NEAR_W/2, PITCH_NEAR_Y, PITCH_CX+PITCH_NEAR_W/2, PITCH_FAR_Y);
+  pitchGrd.addColorStop(0, v.pitch);
+  pitchGrd.addColorStop(0.5, lightenColor(v.pitch, 20));
+  pitchGrd.addColorStop(1, darkenColor(v.pitch, 10));
+  cx.fillStyle = pitchGrd;
+  cx.beginPath();
+  cx.moveTo(PITCH_CX - PITCH_NEAR_W/2, PITCH_NEAR_Y);
+  cx.lineTo(PITCH_CX + PITCH_NEAR_W/2, PITCH_NEAR_Y);
+  cx.lineTo(PITCH_CX + PITCH_FAR_W/2,  PITCH_FAR_Y);
+  cx.lineTo(PITCH_CX - PITCH_FAR_W/2,  PITCH_FAR_Y);
+  cx.closePath(); cx.fill();
+
+  // Pitch seam lines
+  cx.strokeStyle='rgba(255,255,255,0.15)'; cx.lineWidth=0.8;
+  for(let i=1;i<5;i++){
+    const t=i/5, p=pitchInterp(t);
+    cx.beginPath(); cx.moveTo(p.x-p.w/2,p.y); cx.lineTo(p.x+p.w/2,p.y); cx.stroke();
+  }
+
+  // Crease lines
+  cx.strokeStyle='rgba(255,255,255,0.8)'; cx.lineWidth=1.5;
+  // Batting crease (near)
+  const nc=pitchInterp(0.07);
+  cx.beginPath(); cx.moveTo(PITCH_CX-nc.w/2-18,nc.y); cx.lineTo(PITCH_CX+nc.w/2+18,nc.y); cx.stroke();
+  // Bowling crease (far)
+  const fc=pitchInterp(0.88);
+  cx.beginPath(); cx.moveTo(PITCH_CX-fc.w/2-8,fc.y); cx.lineTo(PITCH_CX+fc.w/2+8,fc.y); cx.stroke();
+  // Popping crease (near)
+  const pc=pitchInterp(0.12);
+  cx.beginPath(); cx.moveTo(PITCH_CX-pc.w/2-10,pc.y); cx.lineTo(PITCH_CX+pc.w/2+10,pc.y); cx.stroke();
+
+  // Stumps — batsman end (near)
+  drawStumps3D(PITCH_CX, PITCH_NEAR_Y-2, PITCH_NEAR_W*0.32, 32, 6);
+  // Stumps — bowler end (far, perspective-scaled)
+  drawStumps3D(PITCH_CX, PITCH_FAR_Y+2, PITCH_FAR_W*0.32, 14, 2.5);
+}
+
+function drawStumps3D(x, y, gapW, h, bW){
+  const positions=[-gapW*0.45, 0, gapW*0.45];
+  // Bails
+  cx.strokeStyle='#FFD700'; cx.lineWidth=bW*0.5;
+  cx.beginPath(); cx.moveTo(x-gapW*0.5,y-h); cx.lineTo(x+gapW*0.5,y-h); cx.stroke();
+  // Stumps
+  positions.forEach(ox=>{
+    const stGrd=cx.createLinearGradient(x+ox-bW/2,y-h,x+ox+bW/2,y);
+    stGrd.addColorStop(0,'#F5E6C8'); stGrd.addColorStop(1,'#C8A064');
+    cx.fillStyle=stGrd;
+    cx.beginPath(); cx.roundRect(x+ox-bW/2,y-h,bW,h+4,bW*0.4); cx.fill();
+    // Ground shadow
+    cx.fillStyle='rgba(0,0,0,0.3)';
+    cx.beginPath(); cx.ellipse(x+ox,y+3,bW*1.5,bW*0.4,0,0,Math.PI*2); cx.fill();
+  });
+}
+
+// ── FIELDERS RENDERER ────────────────────────────────────────────────────
+function drawFielders(){
+  // Positions in field (angle, distance from center)
+  const positions=[
+    [0.08,0.55,PITCH_CX, PITCH_FAR_Y+30],          // Wicketkeeper (behind batsman stumps, at far end = behind bowler here)
+    [-0.3,0.45,PITCH_CX-90, PITCH_FAR_Y-20],       // slip
+    [0.55,0.65,PITCH_CX+140,PITCH_FAR_Y+40],       // gully
+    [-0.7,0.72,PITCH_CX-190,BH*0.52],              // mid-on
+    [0.72,0.72,PITCH_CX+190,BH*0.52],              // mid-off
+    [-0.9,0.88,PITCH_CX-260,BH*0.60],              // square leg
+    [0.90,0.88,PITCH_CX+255,BH*0.60],              // point
+    [-0.5,0.92,PITCH_CX-180,BH*0.68],              // fine leg
+    [0.55,0.92,PITCH_CX+180,BH*0.67],              // third man
+  ];
+  positions.forEach(([_a,_r,fx,fy],i)=>{
+    if(fx<0||fx>860||fy<0||fy>BH*0.9) return;
+    const scl = 0.5 + 0.3 * ((fy - PITCH_FAR_Y)/(PITCH_NEAR_Y - PITCH_FAR_Y));
+    drawMiniCricketer(fx, fy, scl*0.65, ['#e63946','#3b82f6','#22c55e','#f97316','#a855f7','#06b6d4','#eab308','#f43f5e','#10b981'][i%9], false);
+  });
+}
+
+function drawMiniCricketer(x, y, scale, color, isKeeper){
+  const s=scale;
+  cx.save();
+  cx.translate(x,y);
+  // Shadow
+  cx.fillStyle='rgba(0,0,0,0.25)';
+  cx.beginPath(); cx.ellipse(0,0,18*s,5*s,0,0,Math.PI*2); cx.fill();
+  // Legs
+  cx.fillStyle='#f0f0f0';
+  cx.fillRect(-9*s,-40*s,8*s,28*s);
+  cx.fillRect(1*s,-40*s,8*s,28*s);
+  // Body
+  cx.fillStyle=color;
+  cx.beginPath(); cx.roundRect(-12*s,-72*s,24*s,35*s,4*s); cx.fill();
+  // Arms
+  cx.strokeStyle=color; cx.lineWidth=6*s; cx.lineCap='round';
+  cx.beginPath(); cx.moveTo(-12*s,-65*s); cx.lineTo(-22*s,-52*s); cx.stroke();
+  cx.beginPath(); cx.moveTo(12*s,-65*s); cx.lineTo(22*s,-52*s); cx.stroke();
+  // Head
+  cx.fillStyle='#c68642';
+  cx.beginPath(); cx.arc(0,-82*s,12*s,0,Math.PI*2); cx.fill();
+  // Helmet
+  cx.fillStyle='#222';
+  cx.beginPath(); cx.arc(0,-84*s,12*s,Math.PI,0); cx.fill();
+  cx.fillRect(-12*s,-86*s,24*s,5*s);
+  cx.restore();
+}
+
+// ── DETAILED BATSMAN ─────────────────────────────────────────────────────
+function drawBatsman(char, swingAnim, swingProg){
+  // Positioned at bottom of pitch
+  const bx = PITCH_CX, by = PITCH_NEAR_Y;
+  const s = 1.0; // scale
+
+  cx.save();
+  cx.translate(bx, by - 10);
+
+  // Shadow under batsman
+  cx.fillStyle='rgba(0,0,0,0.3)';
+  cx.beginPath(); cx.ellipse(0, 5, 45*s, 10*s, 0, 0, Math.PI*2); cx.fill();
+
+  const kitC = char?.kitColor || '#e63946';
+  const helmC = char?.helmetColor || '#8b0000';
+
+  // === LEGS with PADS ===
+  const legSwing = swingAnim ? Math.sin(swingProg*Math.PI)*8 : 0;
+  // Back leg (right)
+  cx.fillStyle='#ddd';
+  cx.fillRect(8*s, -85*s, 20*s, 65*s); // pad
+  cx.fillStyle='#c0c0c0';
+  cx.fillRect(10*s, -85*s, 3*s, 65*s); cx.fillRect(24*s, -85*s, 3*s, 65*s); // straps
+  cx.fillStyle='#888'; cx.fillRect(8*s,-25*s,20*s,8*s); cx.fillRect(8*s,-50*s,20*s,8*s);
+  // Front leg (left)
+  cx.fillStyle='#eee';
+  cx.fillRect(-28*s+legSwing*0.4, -88*s, 20*s, 68*s); // pad
+  cx.fillStyle='#ccc';
+  cx.fillRect(-26*s+legSwing*0.4, -88*s, 3*s, 68*s);
+  cx.fillRect(-12*s+legSwing*0.4, -88*s, 3*s, 68*s);
+  cx.fillStyle='#aaa';
+  cx.fillRect(-28*s+legSwing*0.4,-28*s,20*s,8*s);
+  cx.fillRect(-28*s+legSwing*0.4,-55*s,20*s,8*s);
+
+  // Shoes
+  cx.fillStyle='#333';
+  cx.beginPath(); cx.roundRect(5*s,-22*s,26*s,12*s,4*s); cx.fill();
+  cx.beginPath(); cx.roundRect(-33*s+legSwing*0.4,-22*s,26*s,12*s,4*s); cx.fill();
+
+  // === BODY ===
+  const bodyTilt = swingAnim ? Math.sin(swingProg*Math.PI*0.5)*10 : 0;
+  cx.save(); cx.rotate(bodyTilt*Math.PI/180);
+
+  // Jersey
+  const jerGrd = cx.createLinearGradient(-20*s,-130*s, 20*s,-90*s);
+  jerGrd.addColorStop(0, lightenColor(kitC,30));
+  jerGrd.addColorStop(1, kitC);
+  cx.fillStyle=jerGrd;
+  cx.beginPath(); cx.roundRect(-22*s,-130*s, 44*s, 48*s, [8*s,8*s,4*s,4*s]); cx.fill();
+  // Jersey details
+  cx.strokeStyle=lightenColor(kitC,50); cx.lineWidth=1.5;
+  cx.beginPath(); cx.moveTo(-22*s,-115*s); cx.lineTo(22*s,-115*s); cx.stroke();
+  cx.font=`bold ${10*s}px Arial`; cx.fillStyle='rgba(255,255,255,0.8)';
+  cx.textAlign='center'; cx.fillText('GB', 0, -102*s);
+
+  // === ARMS ===
+  // Back arm (right - lower)
+  cx.strokeStyle='#c68642'; cx.lineWidth=10*s; cx.lineCap='round';
+  if(swingAnim){
+    const armAngle = -1.8 + swingProg*2.4;
+    cx.save();
+    cx.beginPath(); cx.moveTo(20*s,-118*s);
+    cx.quadraticCurveTo(40*s+Math.cos(armAngle)*20*s, -120*s+Math.sin(armAngle)*20*s,
+      30*s+Math.cos(armAngle)*38*s, -110*s+Math.sin(armAngle)*38*s);
+    cx.stroke();
+    cx.restore();
+    // Top arm
+    cx.beginPath(); cx.moveTo(-20*s,-120*s);
+    cx.quadraticCurveTo(-40*s,-130*s-swingProg*20*s, -30*s,-145*s-swingProg*10*s);
+    cx.stroke();
+  } else {
+    // Stance arms
+    cx.beginPath(); cx.moveTo(18*s,-118*s); cx.lineTo(26*s,-95*s); cx.lineTo(22*s,-80*s); cx.stroke();
+    cx.beginPath(); cx.moveTo(-18*s,-120*s); cx.lineTo(-22*s,-100*s); cx.lineTo(-18*s,-88*s); cx.stroke();
+  }
+
+  // Batting gloves
+  cx.fillStyle='#cc3322';
+  if(swingAnim){
+    cx.beginPath(); cx.roundRect(22*s,-88*s, 16*s, 14*s, 5*s); cx.fill();
+  } else {
+    cx.beginPath(); cx.roundRect(14*s,-86*s, 16*s, 14*s, 5*s); cx.fill();
+  }
+
+  cx.restore(); // body tilt
+
+  // === HEAD & HELMET ===
+  cx.fillStyle='#c68642';
+  cx.beginPath(); cx.arc(0, -144*s, 20*s, 0, Math.PI*2); cx.fill();
+  // Helmet shell
+  const helGrd = cx.createRadialGradient(-5*s,-150*s, 2*s, 0,-144*s, 20*s);
+  helGrd.addColorStop(0, lightenColor(helmC,40));
+  helGrd.addColorStop(1, helmC);
+  cx.fillStyle=helGrd;
+  cx.beginPath(); cx.arc(0,-144*s, 21*s, Math.PI, 0); cx.fill();
+  cx.beginPath(); cx.roundRect(-23*s,-150*s, 46*s, 10*s, 2*s); cx.fill();
+  // Helmet grill
+  cx.strokeStyle='#888'; cx.lineWidth=2*s;
+  for(let i=0;i<5;i++){
+    cx.beginPath(); cx.moveTo(-12*s+i*5*s,-142*s); cx.lineTo(-14*s+i*5*s,-130*s); cx.stroke();
+  }
+  cx.beginPath(); cx.moveTo(-13*s,-139*s); cx.lineTo(13*s,-139*s); cx.stroke();
+  cx.beginPath(); cx.moveTo(-13*s,-134*s); cx.lineTo(13*s,-134*s); cx.stroke();
+  // Chin
+  cx.fillStyle='#b05a30';
+  cx.beginPath(); cx.arc(0,-128*s, 7*s, 0, Math.PI); cx.fill();
+  // Eyes
+  cx.fillStyle='#222';
+  cx.beginPath(); cx.arc(-8*s,-144*s, 2.5*s, 0, Math.PI*2); cx.fill();
+  cx.beginPath(); cx.arc(8*s,-144*s, 2.5*s, 0, Math.PI*2); cx.fill();
+
+  // === BAT ===
+  const batAngle = swingAnim ? (-1.2 + swingProg*2.0) : -0.3;
+  const batX = swingAnim ? 24*s : 18*s;
+  const batY = swingAnim ? -105*s : -90*s;
+  cx.save();
+  cx.translate(batX, batY);
+  cx.rotate(batAngle);
+  // Handle
+  cx.strokeStyle='#6b3a1f'; cx.lineWidth=5*s; cx.lineCap='round';
+  cx.beginPath(); cx.moveTo(0,0); cx.lineTo(0, 55*s); cx.stroke();
+  // Grip tape
+  cx.strokeStyle='#333'; cx.lineWidth=3*s;
+  for(let i=0;i<4;i++){
+    cx.beginPath(); cx.moveTo(-3*s, i*8*s+4*s); cx.lineTo(3*s, i*8*s+8*s); cx.stroke();
+  }
+  // Blade
+  const blGrd = cx.createLinearGradient(-10*s,30*s, 10*s,30*s);
+  blGrd.addColorStop(0,'#c8a050'); blGrd.addColorStop(0.5,'#f0d080'); blGrd.addColorStop(1,'#c8a050');
+  cx.fillStyle=blGrd;
+  cx.beginPath(); cx.roundRect(-10*s,38*s, 22*s, 50*s, [2*s,2*s,8*s,8*s]); cx.fill();
+  cx.strokeStyle='#a87030'; cx.lineWidth=1*s; cx.stroke();
+  // Brand mark
+  cx.fillStyle='rgba(150,80,20,0.6)';
+  cx.font=`bold ${7*s}px Arial`; cx.textAlign='center';
+  cx.fillText('GB', 1*s, 65*s);
+  cx.restore(); // bat
+
+  cx.restore(); // main transform
+}
+
+// ── DETAILED BOWLER ──────────────────────────────────────────────────────
+function drawBowler(char, runProg, delivProg){
+  const bp = pitchInterp(0.9); // bowler stands near the far end
+  const bx = bp.x - 35, by = bp.y;
+  const s = bp.scale * 0.95;
+
+  cx.save();
+  cx.translate(bx, by);
+
+  // Shadow
+  cx.fillStyle='rgba(0,0,0,0.2)';
+  cx.beginPath(); cx.ellipse(0, 2, 22*s, 6*s, 0, 0, Math.PI*2); cx.fill();
+
+  const kitC = char?.kitColor || '#3b82f6';
+  const legSwing = Math.sin(runProg * Math.PI * 2) * 25;
+
+  // Legs
+  cx.fillStyle='#ddd';
+  cx.fillRect(-8*s,-50*s+legSwing*0.3, 10*s, 35*s);
+  cx.fillRect(2*s,-50*s-legSwing*0.3, 10*s, 35*s);
+
+  // Body
+  cx.fillStyle=kitC;
+  cx.beginPath(); cx.roundRect(-12*s,-80*s, 24*s, 32*s, 5*s); cx.fill();
+
+  // Arms (bowling action)
+  cx.strokeStyle='#c68642'; cx.lineWidth=7*s; cx.lineCap='round';
+  if(delivProg>0){
+    // Delivery action
+    const armA = -2.0 + delivProg * 3.5;
+    cx.beginPath(); cx.moveTo(10*s,-72*s);
+    cx.lineTo(10*s + Math.cos(armA)*25*s, -72*s + Math.sin(armA)*25*s);
+    cx.stroke();
+    cx.beginPath(); cx.moveTo(-10*s,-72*s); cx.lineTo(-20*s,-60*s); cx.stroke();
+  } else {
+    cx.beginPath(); cx.moveTo(-10*s,-70*s); cx.lineTo(-20*s,-55*s); cx.stroke();
+    cx.beginPath(); cx.moveTo(10*s,-70*s); cx.lineTo(22*s,-58*s+legSwing*0.2); cx.stroke();
+  }
+
+  // Head
+  cx.fillStyle='#c68642';
+  cx.beginPath(); cx.arc(0,-90*s, 13*s, 0, Math.PI*2); cx.fill();
+  cx.fillStyle='#222';
+  cx.beginPath(); cx.arc(0,-91*s, 13*s, Math.PI, 0); cx.fill();
+  cx.fillStyle='#333'; cx.fillRect(-13*s,-93*s, 26*s, 5*s);
+
+  cx.restore();
+}
+
+// ── BALL RENDERER ────────────────────────────────────────────────────────
+function drawBall(x, y, scale=1, glowing=false, speed=0){
+  const r = 10*scale;
+  cx.save();
+  if(glowing){ cx.shadowColor='#ff4444'; cx.shadowBlur=18*scale; }
+  // Seam rotation based on speed
+  const seamAngle = G.t * 0.02 * (speed||1);
+  const ballGrd = cx.createRadialGradient(x-r*0.3,y-r*0.3,r*0.05, x,y, r);
+  ballGrd.addColorStop(0,'#e8605a'); ballGrd.addColorStop(0.6,'#c0392b'); ballGrd.addColorStop(1,'#7b1a14');
+  cx.fillStyle=ballGrd;
+  cx.beginPath(); cx.arc(x, y, r, 0, Math.PI*2); cx.fill();
+  // Seam
+  cx.strokeStyle='rgba(255,255,255,0.7)'; cx.lineWidth=1.5*scale;
+  cx.save(); cx.translate(x,y); cx.rotate(seamAngle);
+  cx.beginPath(); cx.arc(0, 0, r*0.65, -0.5, 0.5); cx.stroke();
+  cx.beginPath(); cx.arc(0, 0, r*0.65, Math.PI-0.5, Math.PI+0.5); cx.stroke();
+  cx.restore();
+  cx.shadowBlur=0;
+  cx.restore();
+}
+
+// ── BATTING UI ────────────────────────────────────────────────────────────
+function drawBattingUI(m){
+  const bat = m.bat;
+
+  // Draw batsman
+  drawBatsman(G.selectedChar, bat.swingResult!==null||bat.mAngle>0.1, bat.ballProg||0);
+
+  // Draw bowler (background)
+  drawBowler(null, G.t*0.003, 0);
+
+  // Ball trajectory trail
+  bat.trail.forEach((tp,i)=>{
+    cx.save(); cx.globalAlpha=(i/bat.trail.length)*0.4;
+    cx.fillStyle='#ff6644';
+    cx.beginPath(); cx.arc(tp.x,tp.y, tp.r||3, 0, Math.PI*2); cx.fill();
+    cx.restore();
+  });
+
+  // Ball during delivery
+  if(bat.ballIncoming){
+    const wp = ballWorldPos(bat.ballProg, bat.delivType);
+    // Trail
+    if(bat.trail.length>12) bat.trail.shift();
+    bat.trail.push({x:wp.x, y:wp.y, r:8*wp.scale});
+    drawBall(wp.x, wp.y, wp.scale, true, 1-bat.ballProg);
+    // Bounce indicator (shadow on pitch)
+    const bounce = bat.delivType==='Bouncer'?0.28 : bat.delivType==='Yorker'?0.72 : 0.42;
+    if(bat.ballProg<bounce+0.04){
+      const bp2=pitchInterp(1-(bounce));
+      cx.fillStyle='rgba(255,80,80,0.3)';
+      cx.beginPath(); cx.ellipse(bp2.x, bp2.y, 12*bp2.scale, 4*bp2.scale, 0, 0, Math.PI*2); cx.fill();
+    }
+    // Bounce sound
+    if(Math.abs(bat.ballProg-bounce)<0.02 && !bat._bouncePlayed){ bat._bouncePlayed=true; Aud.bounce(); }
+  }
+
+  // After hit — shot trajectory
+  if(bat.swingResult!==null && bat.shotTrajectory){
+    const st=bat.shotTrajectory;
+    cx.save();
+    cx.strokeStyle=bat.swingResult===6?'#22c55e':bat.swingResult===4?'#3b82f6':'#FFD700';
+    cx.lineWidth=2.5; cx.setLineDash([8,5]);
+    cx.beginPath();
+    cx.moveTo(PITCH_CX, PITCH_NEAR_Y-80);
+    cx.quadraticCurveTo(PITCH_CX+st.ctrlX, PITCH_NEAR_Y-st.ctrlY, PITCH_CX+st.endX, PITCH_NEAR_Y+st.endY);
+    cx.stroke(); cx.setLineDash([]);
+    // Animated ball on trajectory
+    const t2=Math.min(1,bat.shotTimer/60);
+    const bx2=PITCH_CX+(PITCH_CX+st.endX-PITCH_CX)*t2*t2;
+    const by2=PITCH_NEAR_Y-80+((PITCH_NEAR_Y+st.endY)-(PITCH_NEAR_Y-80))*t2*t2;
+    const arc2=-Math.sin(t2*Math.PI)*st.arcH;
+    drawBall(bx2+st.ctrlX*t2*(1-t2),by2+arc2,0.8+t2*0.4,true,1);
+    bat.shotTimer++;
+    cx.restore();
+  }
+
+  // Timing ring (only when ball is within swing range)
+  if(bat.canSwing && !bat.swingResult){
+    const rx=PITCH_CX, ry=PITCH_NEAR_Y-90;
+    const RR=68;
+    // Outer track
+    cx.beginPath(); cx.arc(rx,ry,RR,0,Math.PI*2);
+    cx.strokeStyle='rgba(255,255,255,0.12)'; cx.lineWidth=16; cx.stroke();
+    // Good zone
+    cx.beginPath(); cx.arc(rx,ry,RR, bat.sweetA-bat.goodW/2, bat.sweetA+bat.goodW/2);
+    cx.strokeStyle='#22c55e'; cx.lineWidth=16; cx.stroke();
+    // Sweet spot
+    cx.beginPath(); cx.arc(rx,ry,RR, bat.sweetA-bat.sweetW/2, bat.sweetA+bat.sweetW/2);
+    cx.strokeStyle='#FFD700'; cx.lineWidth=16; cx.stroke();
+    cx.shadowColor='#FFD700'; cx.shadowBlur=18;
+    cx.beginPath(); cx.arc(rx,ry,RR, bat.sweetA-bat.sweetW/2, bat.sweetA+bat.sweetW/2);
+    cx.strokeStyle='#FFD700'; cx.lineWidth=8; cx.stroke();
+    cx.shadowBlur=0;
+
+    // Needle
+    const nx=rx+Math.cos(bat.mAngle)*RR, ny=ry+Math.sin(bat.mAngle)*RR;
+    cx.fillStyle='#fff'; cx.shadowColor='#fff'; cx.shadowBlur=10;
+    cx.beginPath(); cx.arc(nx,ny,8,0,Math.PI*2); cx.fill();
+    cx.shadowBlur=0;
+    cx.strokeStyle='rgba(255,255,255,0.3)'; cx.lineWidth=2;
+    cx.beginPath(); cx.moveTo(rx,ry); cx.lineTo(nx,ny); cx.stroke();
+
+    // SPACE prompt (pulsing)
+    cx.save();
+    const pa = 0.5+0.5*Math.sin(G.t*0.012);
+    cx.globalAlpha = pa;
+    cx.fillStyle='rgba(0,0,0,0.7)';
+    cx.beginPath(); cx.roundRect(rx-90,ry+RR+10,180,32,8); cx.fill();
+    cx.font='bold 14px Arial'; cx.fillStyle='#FFD700'; cx.textAlign='center';
+    cx.fillText('SPACE = HIT', rx, ry+RR+30);
+    cx.restore();
+
+    // Shot direction fan
+    const shotLabels=['Drive','Pull','Cut','Sweep','Flick','Glance'];
+    const fanAngles=[-0.6,-1.2,-1.8,0.6,1.2,1.8];
+    cx.font='10px Arial'; cx.textAlign='center';
+    fanAngles.forEach((fa,i)=>{
+      const isSel=bat.shotDir===i;
+      const sx2=rx+Math.cos(fa)*50, sy2=ry+Math.sin(fa)*50;
+      cx.fillStyle=isSel?'rgba(255,215,0,0.9)':'rgba(0,0,0,0.6)';
+      cx.beginPath(); cx.roundRect(sx2-22,sy2-9,44,18,9); cx.fill();
+      cx.strokeStyle=isSel?'#FFD700':'rgba(255,255,255,0.3)'; cx.lineWidth=1;
+      cx.stroke();
+      cx.fillStyle=isSel?'#000':'#ccc';
+      cx.fillText(shotLabels[i], sx2, sy2+4);
+    });
+    cx.font='10px Arial'; cx.fillStyle='rgba(255,215,0,0.6)'; cx.textAlign='center';
+    cx.fillText('[Q/E] change shot', rx, ry+RR+50);
+  }
+
+  // Swing result text
+  if(bat.swingResult!==null && bat.swingTimer>0){
+    cx.save();
+    cx.globalAlpha=Math.min(1,bat.swingTimer/180);
+    cx.font='bold 52px "Arial Black",Arial';
+    cx.textAlign='center';
+    cx.fillStyle=bat.swingColor; cx.shadowColor=bat.swingColor; cx.shadowBlur=30;
+    cx.fillText(bat.swingText, PITCH_CX, PITCH_NEAR_Y-200);
+    cx.restore();
+  }
+
+  // Delivery type label
+  if(!bat.canSwing && bat.ballIncoming){
+    cx.save();
+    cx.fillStyle='rgba(0,0,0,0.75)';
+    cx.beginPath(); cx.roundRect(PITCH_CX-75, PITCH_FAR_Y-40, 150, 26, 8); cx.fill();
+    cx.font='bold 13px Arial'; cx.textAlign='center'; cx.fillStyle='#FFD700';
+    cx.fillText(`⚡ ${bat.delivType}`, PITCH_CX, PITCH_FAR_Y-22);
+    cx.restore();
+  }
+}
+
+// ── BOWLING UI ────────────────────────────────────────────────────────────
+function drawBowlingUI(m){
+  const bowl=m.bowl;
+
+  // AI batsman at near (bottom)
+  drawBatsman(null, false, 0);
+
+  // Player bowler running up
+  const rp = bowl.phase==='delivering' ? bowl.delivProg : Math.sin(G.t*0.005)*0.5+0.5;
+  drawBowler(G.selectedChar, rp, bowl.phase==='delivering'?bowl.delivProg:0);
+
+  // Ball during delivery
+  if(bowl.phase==='delivering'){
+    const wp=ballWorldPos(bowl.delivProg, ['Yorker','Bouncer','Swing','Spinner','Googly','Slower'][bowl.selType]||'Normal');
+    drawBall(wp.x, wp.y, wp.scale, true, 1-bowl.delivProg);
+  }
+
+  // AI result display
+  if(bowl.aiResult && bowl.aiTimer>0){
+    cx.save();
+    cx.globalAlpha=Math.min(1,bowl.aiTimer/150);
+    cx.font='bold 48px "Arial Black"';
+    cx.textAlign='center';
+    const r=bowl.aiResult;
+    const c=r==='W'?'#22c55e':r==='6'?'#ff4444':r==='4'?'#f97316':'#FFD700';
+    cx.fillStyle=c; cx.shadowColor=c; cx.shadowBlur=25;
+    const t=r==='W'?'WICKET! ✅':r==='6'?'SIX! 😱':r==='4'?'FOUR! 😬':r==='0'?'DOT! ✓':`${r} RUN${r!=='1'?'S':''}`;
+    cx.fillText(t, PITCH_CX, PITCH_NEAR_Y-160);
+    cx.restore();
+  }
+
+  // Delivery selector (panel at bottom)
+  if(bowl.phase==='select'){
+    const types=['Yorker','Bouncer','Swing','Spinner','Googly','Slower'];
+    const icons=['🎯','⬆','🌀','🔄','🎭','🐢'];
+    const colors=['#c0392b','#e67e22','#2980b9','#27ae60','#8e44ad','#7f8c8d'];
+    const panW=560, panH=120, px_=(BW*0.68-panW)/2, py_=BH-140;
+
+    cx.fillStyle='rgba(5,5,20,0.95)';
+    cx.beginPath(); cx.roundRect(px_-10,py_-18,panW+20,panH+28,14); cx.fill();
+    cx.strokeStyle='#FFD700'; cx.lineWidth=2; cx.stroke();
+    cx.font='bold 12px Arial'; cx.textAlign='center'; cx.fillStyle='#FFD700';
+    cx.fillText('SELECT DELIVERY — Press 1-6 or click', px_+panW/2, py_-4);
+
+    types.forEach((tp,i)=>{
+      const col=i%3, row=Math.floor(i/3);
+      const bx=px_+col*(panW/3)+8, by=py_+row*52+4;
+      const bw=panW/3-16, bh=44;
+      const isHov=G.mouse.x>bx&&G.mouse.x<bx+bw&&G.mouse.y>by&&G.mouse.y<by+bh;
+      const isSel=bowl.selType===i;
+      cx.fillStyle=isSel?colors[i]:(isHov?colors[i]+'88':'rgba(20,20,40,0.9)');
+      cx.beginPath(); cx.roundRect(bx,by,bw,bh,8); cx.fill();
+      cx.strokeStyle=isSel?'#fff':colors[i]; cx.lineWidth=isSel?2:1; cx.stroke();
+      cx.font='18px serif'; cx.textAlign='center'; cx.fillStyle='#fff';
+      cx.fillText(icons[i], bx+bw/2, by+20);
+      cx.font='bold 11px Arial'; cx.fillText(`${i+1}. ${tp}`, bx+bw/2, by+36);
+      if(G.mouse.clicked&&isHov){ bowl.selType=i; bowl.phase='aim'; Aud.click(); }
+    });
+  }
+
+  // Aim phase
+  if(bowl.phase==='aim'){
+    // Highlight pitch aim area
+    cx.fillStyle='rgba(255,215,0,0.08)';
+    cx.beginPath();
+    cx.moveTo(PITCH_CX-PITCH_NEAR_W/2, PITCH_NEAR_Y);
+    cx.lineTo(PITCH_CX+PITCH_NEAR_W/2, PITCH_NEAR_Y);
+    cx.lineTo(PITCH_CX+PITCH_FAR_W/2, PITCH_FAR_Y);
+    cx.lineTo(PITCH_CX-PITCH_FAR_W/2, PITCH_FAR_Y);
+    cx.closePath(); cx.fill();
+
+    // Zone labels
+    const zoneY=[
+      {y:PITCH_NEAR_Y-50,label:'Yorker Zone',color:'rgba(192,57,43,0.5)'},
+      {y:PITCH_NEAR_Y-110,label:'Full Length',color:'rgba(39,174,96,0.4)'},
+      {y:PITCH_NEAR_Y-180,label:'Good Length',color:'rgba(41,128,185,0.4)'},
+      {y:PITCH_NEAR_Y-260,label:'Short Pitch',color:'rgba(231,76,60,0.35)'},
+    ];
+    zoneY.forEach(z=>{
+      const t2=1-(z.y-PITCH_FAR_Y)/(PITCH_NEAR_Y-PITCH_FAR_Y);
+      const p2=pitchInterp(t2);
+      cx.fillStyle=z.color;
+      cx.beginPath(); cx.roundRect(p2.x-p2.w/2,z.y-8,p2.w,18,4); cx.fill();
+      cx.font=`9px Arial`; cx.textAlign='left'; cx.fillStyle='rgba(255,255,255,0.7)';
+      cx.fillText(z.label, p2.x+p2.w/2+5, z.y+5);
+    });
+
+    // Aim crosshair
+    const ax=bowl.aimX, ay=bowl.aimY;
+    cx.strokeStyle='#FFD700'; cx.lineWidth=2;
+    cx.beginPath(); cx.arc(ax,ay,18,0,Math.PI*2); cx.stroke();
+    cx.beginPath(); cx.moveTo(ax-26,ay); cx.lineTo(ax+26,ay); cx.moveTo(ax,ay-26); cx.lineTo(ax,ay+26); cx.stroke();
+    cx.shadowColor='#FFD700'; cx.shadowBlur=12;
+    cx.beginPath(); cx.arc(ax,ay,5,0,Math.PI*2);
+    cx.fillStyle='#FFD700'; cx.fill(); cx.shadowBlur=0;
+
+    // Instruction
+    cx.fillStyle='rgba(0,0,0,0.85)';
+    cx.beginPath(); cx.roundRect(PITCH_CX-160,BH-52,320,36,8); cx.fill();
+    cx.font='bold 13px Arial'; cx.textAlign='center'; cx.fillStyle='#FFD700';
+    cx.fillText('Move mouse on pitch · Click to BOWL!', PITCH_CX, BH-29);
+
+    // Back button
+    const bkX=PITCH_CX+180, bkY=BH-52;
+    const bkH=G.mouse.x>bkX&&G.mouse.x<bkX+90&&G.mouse.y>bkY&&G.mouse.y<bkY+32;
+    cx.fillStyle=bkH?'#555':'rgba(40,40,40,0.9)';
+    cx.beginPath(); cx.roundRect(bkX,bkY,90,32,8); cx.fill();
+    cx.strokeStyle='#666'; cx.lineWidth=1; cx.stroke();
+    cx.font='12px Arial'; cx.fillStyle='#ccc';
+    cx.fillText('◀ Back',bkX+45,bkY+21);
+    if(G.mouse.clicked&&bkH){ bowl.phase='select'; Aud.click(); }
+
+    // Click to bowl
+    const notBack=!(G.mouse.x>bkX&&G.mouse.x<bkX+90&&G.mouse.y>bkY&&G.mouse.y<bkY+32);
+    const onPitch=G.mouse.y>PITCH_FAR_Y-30&&G.mouse.y<PITCH_NEAR_Y&&G.mouse.x>PITCH_CX-PITCH_NEAR_W&&G.mouse.x<PITCH_CX+PITCH_NEAR_W;
+    if(G.mouse.clicked&&notBack&&onPitch){
+      bowl.aimX=G.mouse.x; bowl.aimY=G.mouse.y;
+      bowl.phase='delivering'; bowl.delivProg=0; bowl.aiResult=null;
+      Aud.bat(0.3);
+    }
+  }
+
+  // Update aim position
+  if(bowl.phase==='aim'){
+    bowl.aimX=G.mouse.x;
+    bowl.aimY=Math.max(PITCH_FAR_Y,Math.min(PITCH_NEAR_Y,G.mouse.y));
+  }
+}
+
+// ── FIELDING UI ───────────────────────────────────────────────────────────
+function drawFieldingUI(m){
+  const fld=m.fld;
+  if(!fld.active) return;
+
+  // Ball arc
+  if(fld.prog<1){
+    const t=fld.prog;
+    const bx=fld.ballX+(fld.ballTX-fld.ballX)*t;
+    const by=fld.ballY+(fld.ballTY-fld.ballY)*t-Math.sin(t*Math.PI)*120;
+    drawBall(bx, by, 0.9+t*0.2, false);
+  }
+
+  // Overlay backdrop
+  cx.fillStyle='rgba(0,0,5,0.5)';
+  cx.beginPath(); cx.roundRect(BW*0.68/2-160,BH-140,320,125,14); cx.fill();
+  cx.strokeStyle='#FFD700'; cx.lineWidth=2; cx.stroke();
+
+  const label=fld.type==='catch'?'⚾ CATCH! Hit green zone!':'🏃 RUN OUT! Hit green zone!';
+  cx.font='bold 14px Arial'; cx.textAlign='center'; cx.fillStyle='#FFD700';
+  cx.fillText(label, BW*0.68/2, BH-116);
+
+  // Meter bar
+  const barX=BW*0.68/2-130, barY=BH-100, barW=260, barH=26;
+  cx.fillStyle='#1a1a2e';
+  cx.beginPath(); cx.roundRect(barX,barY,barW,barH,barH/2); cx.fill();
+
+  // Green zone (35-65%)
+  const gzX=barX+barW*0.35;
+  cx.fillStyle='#22c55e';
+  cx.beginPath(); cx.roundRect(gzX,barY,barW*0.3,barH,barH/2); cx.fill();
+  // Gold sweet spot
+  cx.fillStyle='#FFD700';
+  cx.beginPath(); cx.roundRect(barX+barW*0.42,barY,barW*0.16,barH,barH/2); cx.fill();
+
+  // Slider
+  const sx=barX+fld.mPos*barW;
+  cx.fillStyle='#fff'; cx.shadowColor='#fff'; cx.shadowBlur=12;
+  cx.beginPath(); cx.arc(sx,barY+barH/2,barH/2+4,0,Math.PI*2); cx.fill();
+  cx.shadowBlur=0;
+
+  cx.font='bold 13px Arial'; cx.fillStyle='rgba(255,215,0,0.7+0.3*Math.sin(G.t*0.015))';
+  cx.fillText('CLICK NOW!', BW*0.68/2, BH-53);
+}
+
+// ── SCOREBOARD ────────────────────────────────────────────────────────────
+function drawScoreboard(m){
+  const SX=BW*0.685, SW=BW*0.308, SH=BH-2;
+  const i=inn(m);
+
+  // Panel
+  const pgrd=cx.createLinearGradient(SX,0,SX,SH);
+  pgrd.addColorStop(0,'#070714'); pgrd.addColorStop(1,'#030308');
+  cx.fillStyle=pgrd;
+  cx.beginPath(); cx.roundRect(SX,1,SW,SH-2,12); cx.fill();
+  cx.strokeStyle='rgba(255,215,0,0.6)'; cx.lineWidth=1.5;
+  cx.beginPath(); cx.roundRect(SX,1,SW,SH-2,12); cx.stroke();
+
+  const padX=SX+12, tw=SW-24;
+  let oy=14;
+
+  // Logo
+  G.logoAlpha=Math.min(1,G.logoAlpha+0.001*G.dt);
+  if(G.logoLoaded && G.logoImg){
+    const lw=SW*0.72, lh=lw*(G.logoImg.naturalHeight/G.logoImg.naturalWidth)||lw*0.45;
+    cx.save(); cx.globalAlpha=G.logoAlpha; cx.shadowColor='#FFD700'; cx.shadowBlur=12;
+    cx.drawImage(G.logoImg, SX+SW/2-lw/2, oy, lw, lh);
+    cx.restore(); oy+=lh+8;
+  } else {
+    drawFallbackLogo(SX+SW/2, oy+24, SW*0.7, G.logoAlpha);
+    oy+=52;
+  }
+
+  // Divider
+  cx.strokeStyle='rgba(255,215,0,0.35)'; cx.lineWidth=1;
+  cx.beginPath(); cx.moveTo(padX,oy); cx.lineTo(padX+tw,oy); cx.stroke(); oy+=10;
+
+  // Team names
+  cx.font='bold 11px Arial'; cx.textAlign='center'; cx.fillStyle='#FFD700';
+  cx.fillText(m.playerName, SX+SW/2, oy); oy+=14;
+  cx.font='10px Arial'; cx.fillStyle='#666'; cx.fillText('vs',SX+SW/2,oy); oy+=13;
+  cx.font='bold 11px Arial'; cx.fillStyle='#ff6666'; cx.fillText(m.oppName,SX+SW/2,oy); oy+=16;
+
+  // Big score
+  cx.font='bold 46px "Arial Black",Arial'; cx.textAlign='center';
+  cx.fillStyle='#FFD700'; cx.shadowColor='#FFD700'; cx.shadowBlur=15;
+  cx.fillText(`${i.runs}/${i.wkts}`, SX+SW/2, oy+40); cx.shadowBlur=0; oy+=50;
+
+  // Overs
+  cx.font='bold 14px Arial'; cx.fillStyle='#ccc';
+  cx.fillText(`${i.ovrs}.${i.balls} / ${m.overs}.0 ov`, SX+SW/2, oy); oy+=20;
+
+  // Run rates
+  const balls=i.ovrs*6+i.balls;
+  const crr=balls>0?((i.runs/balls)*6).toFixed(2):'0.00';
+  cx.font='12px Arial'; cx.fillStyle='#aaa';
+  cx.fillText(`CRR: ${crr}`, SX+SW/2, oy); oy+=16;
+
+  if(m.curInn===1 && m.target){
+    const need=m.target-i.runs, bl=(m.overs*6)-balls;
+    const rrr=bl>0?((need/bl)*6).toFixed(2):'∞';
+    cx.font='bold 13px Arial'; cx.fillStyle=need>0?'#ff9966':'#66ff66';
+    cx.fillText(`Need ${need} off ${bl}`, SX+SW/2, oy); oy+=16;
+    cx.font='12px Arial'; cx.fillStyle='#ff9966';
+    cx.fillText(`RRR: ${rrr}  Target: ${m.target}`, SX+SW/2, oy); oy+=16;
+  }
+
+  // Innings label
+  cx.font='bold 11px Arial'; cx.fillStyle='rgba(255,215,0,0.7)';
+  cx.fillText(`${m.curInn===0?'1st':'2nd'} Innings`, SX+SW/2, oy); oy+=18;
+
+  // Divider
+  cx.strokeStyle='rgba(255,215,0,0.2)'; cx.beginPath(); cx.moveTo(padX,oy); cx.lineTo(padX+tw,oy); cx.stroke(); oy+=8;
+
+  // Ball history
+  cx.font='bold 11px Arial'; cx.fillStyle='#888'; cx.fillText('This Over',SX+SW/2,oy); oy+=14;
+  const hist=i.hist.slice(-12);
+  const cw2=(tw-4)/Math.max(6,Math.min(hist.length,6));
+  const row1=hist.slice(-12,-6), row2=hist.slice(-6);
+  [row1,row2].forEach((row,ri)=>{
+    row.forEach((b,bi)=>{
+      const bx2=padX+bi*(cw2+2), by2=oy+ri*26;
+      let bg='#1a1a2e', tc='#fff';
+      if(b==='W'){bg='#7f1d1d';tc='#fca5a5';}
+      else if(b==='6'){bg='#14532d';tc='#4ade80';}
+      else if(b==='4'){bg='#1e3a5f';tc='#60a5fa';}
+      else if(b==='●'){bg='#1a1a1a';tc='#555';}
+      cx.fillStyle=bg; cx.beginPath(); cx.roundRect(bx2,by2,cw2,20,4); cx.fill();
+      cx.font=`bold ${b==='W'?10:12}px Arial`; cx.fillStyle=tc; cx.textAlign='center';
+      cx.fillText(b,bx2+cw2/2,by2+14);
+    });
+  });
+  oy+=58;
+
+  if(m.curInn===1){
+    cx.strokeStyle='rgba(255,215,0,0.15)'; cx.beginPath(); cx.moveTo(padX,oy); cx.lineTo(padX+tw,oy); cx.stroke(); oy+=8;
+    cx.font='11px Arial'; cx.fillStyle='#666'; cx.textAlign='center';
+    const i0=m.innings[0];
+    cx.fillText(`1st Inn: ${i0.runs}/${i0.wkts}`,SX+SW/2,oy); oy+=14;
+  }
+
+  // Tournament pill
+  if(G.tournament){
+    const td=G.tournament, total=td.schedule.length, played=td.schedule.filter(s=>s.played).length;
+    const modeLabel=G.matchMode==='vehari'?'Vehari':'Mohalla';
+    cx.fillStyle='rgba(255,215,0,0.1)';
+    cx.beginPath(); cx.roundRect(padX,oy,tw,22,11); cx.fill();
+    cx.strokeStyle='rgba(255,215,0,0.3)'; cx.lineWidth=1; cx.stroke();
+    cx.font='10px Arial'; cx.fillStyle='#FFD700'; cx.textAlign='center';
+    cx.fillText(`${modeLabel} • Match ${played+1}/${total}  W:${td.wins} L:${td.losses}`, SX+SW/2, oy+15);
+    oy+=28;
+  }
+
+  // Venue name
+  cx.font='10px Arial'; cx.fillStyle='rgba(255,215,0,0.4)'; cx.textAlign='center';
+  cx.fillText(`📍 ${VENUES[G.currentVenue].name}`, SX+SW/2, oy+10);
+
+  // Coach Wasay (at bottom of scoreboard)
+  const coachY=BH-210;
+  drawCoachWasay(SX, coachY, SW, 205);
+}
+
+// ── COACH WASAY ───────────────────────────────────────────────────────────
+const Coach = {
+  msg:'Dhyan raho, maidaan tumhara hai.', timer:0, animT:0,
+  lines:{
+    wicket:["Maine kaha tha...","Focus karo. Waqt abhi hai.","Haar ke jeetnay wala Badshah kehlata hai."],
+    six:["WAHI TAQAT! BADSHAH MODE!","AB BAAT BAN GAYI!","YE HI CHAHIYE THA!"],
+    dot_balls:["Gap dhoondo yaar.","Defense se attack ki taraf jao.","Timing pe dhyan do."],
+    pressure_chase:["Ab Badshah banna padega.","Ek-ek run matter karta hai.","Calm raho. Trust karo apne upar."],
+    collapse:["Ruko! Sochke khelo!","Defense first. Attack baad mein.","Bhaagna nahi, larna hai!"],
+    final_over:["YE AAKHRI OVER! JEET JAO!","Koi back nahi. Seedha maaro!","BADSHAH BANNA PADEGA AAKHIR!"],
+    good_start:["Sahi direction.","Ye momentum pakad lo.","Zabardast shuruwaat!"],
+    default:["Dhyan raho.","Maidaan tumhara hai.","Badshah ki tarah khelo."],
+  },
+  say(sit){ const pool=this.lines[sit]||this.lines.default; this.msg=pool[Math.floor(Math.random()*pool.length)]; this.timer=3800; },
+};
+
+function drawCoachWasay(x, y, w, h){
+  cx.save();
+  // Panel
+  cx.fillStyle='rgba(5,5,18,0.95)';
+  cx.beginPath(); cx.roundRect(x,y,w,h,10); cx.fill();
+  cx.strokeStyle='rgba(255,215,0,0.5)'; cx.lineWidth=1.5; cx.stroke();
+
+  // Title
+  cx.font='bold 11px Arial'; cx.textAlign='center'; cx.fillStyle='#FFD700';
+  cx.fillText('COACH WASAY', x+w/2, y+18);
+  cx.strokeStyle='rgba(255,215,0,0.25)'; cx.lineWidth=1;
+  cx.beginPath(); cx.moveTo(x+8,y+24); cx.lineTo(x+w-8,y+24); cx.stroke();
+
+  // Coach image or fallback
+  const imgSize=Math.min(w*0.55, 100);
+  const imgX=x+w/2-imgSize/2, imgY=y+32;
+
+  if(G.wasayImgLoaded && G.wasayImg){
+    // Draw image in circle crop
+    cx.save();
+    cx.beginPath(); cx.arc(x+w/2, imgY+imgSize/2, imgSize/2, 0, Math.PI*2);
+    cx.clip();
+    cx.drawImage(G.wasayImg, imgX, imgY, imgSize, imgSize*(G.wasayImg.naturalHeight/G.wasayImg.naturalWidth)||imgSize);
+    cx.restore();
+    // Circle border
+    cx.strokeStyle='#FFD700'; cx.lineWidth=2.5;
+    cx.beginPath(); cx.arc(x+w/2, imgY+imgSize/2, imgSize/2, 0, Math.PI*2); cx.stroke();
+    // Crown
+    cx.font='22px serif'; cx.textAlign='center';
+    cx.fillText('👑', x+w/2, imgY+4);
+  } else {
+    drawCoachFigure(x+w/2, imgY+imgSize/2, imgSize*0.5);
+  }
+
+  // Name
+  cx.font='bold 12px Arial'; cx.textAlign='center'; cx.fillStyle='#FFD700';
+  cx.fillText('Shaikh Wasay', x+w/2, imgY+imgSize+18);
+  cx.font='10px Arial'; cx.fillStyle='#888';
+  cx.fillText('"The Real BADSHAH"', x+w/2, imgY+imgSize+30);
+
+  // Speech bubble
+  if(Coach.msg && Coach.timer>0){
+    const bY=imgY+imgSize+40;
+    const bH=50, bW=w-20;
+    cx.fillStyle='rgba(0,0,0,0.9)';
+    cx.beginPath(); cx.roundRect(x+10,bY,bW,bH,8); cx.fill();
+    cx.strokeStyle='rgba(255,215,0,0.5)'; cx.lineWidth=1; cx.stroke();
+    // Bubble tail
+    cx.fillStyle='rgba(0,0,0,0.9)';
+    cx.beginPath(); cx.moveTo(x+w/2-8,bY); cx.lineTo(x+w/2,bY-10); cx.lineTo(x+w/2+8,bY); cx.fill();
+
+    cx.font='10px Arial'; cx.fillStyle='#FFD700'; cx.textAlign='center';
+    wrapText2(Coach.msg, x+10+bW/2, bY+16, bW-16, 16, 10);
+    Coach.timer -= G.dt;
+  }
+  cx.restore();
+}
+
+function drawCoachFigure(cx2, cy2, r){
+  // Fallback coach drawing (suit)
+  cx.save();
+  cx.translate(cx2, cy2);
+  // Body / suit
+  cx.fillStyle='#3a3a4a';
+  cx.beginPath(); cx.roundRect(-r*0.45,-r*0.6,r*0.9,r*0.7,[r*0.1,r*0.1,r*0.05,r*0.05]); cx.fill();
+  // Tie
+  cx.fillStyle='#FFD700';
+  cx.beginPath(); cx.moveTo(-4,-r*0.55); cx.lineTo(4,-r*0.55); cx.lineTo(2,r*0.08); cx.lineTo(-2,r*0.08); cx.closePath(); cx.fill();
+  // Head
+  cx.fillStyle='#c68642';
+  cx.beginPath(); cx.arc(0,-r*0.72,r*0.32,0,Math.PI*2); cx.fill();
+  // Crown
+  cx.fillStyle='#FFD700';
+  cx.beginPath(); cx.moveTo(-12,-r-4); cx.lineTo(-8,-r-18); cx.lineTo(0,-r-10); cx.lineTo(8,-r-18); cx.lineTo(12,-r-4); cx.closePath(); cx.fill();
+  cx.restore();
+}
+
+function wrapText2(text, x, y, maxW, lineH, size){
+  cx.font=`${size}px Arial`;
+  const words=text.split(' ');
+  let line='', lines=[];
+  words.forEach(w=>{ const t=line+(line?' ':'')+w; if(cx.measureText(t).width>maxW){lines.push(line);line=w;} else line=t; });
+  lines.push(line);
+  cx.textAlign='center';
+  lines.forEach((l,i)=>cx.fillText(l,x,y+i*lineH));
+}
+
+// ── LOGO HELPERS ──────────────────────────────────────────────────────────
+function drawFallbackLogo(x, y, w, alpha){
+  cx.save(); cx.globalAlpha=Math.max(0,alpha);
+  const h=w*0.52;
+  // Crown
+  cx.fillStyle='#FFD700'; cx.shadowColor='#FFD700'; cx.shadowBlur=15;
+  cx.beginPath();
+  const pts=[[-0.4,0.15],[-.22,-0.2],[0,-0.42],[.22,-0.2],[0.4,0.15]];
+  cx.moveTo(x+pts[0][0]*w, y+pts[0][1]*h);
+  pts.forEach(([dx,dy])=>cx.lineTo(x+dx*w,y+dy*h));
+  cx.closePath(); cx.fill();
+  [-.4,0,.4].forEach(dx=>{ cx.beginPath(); cx.arc(x+dx*w,y-0.45*h,w*0.045,0,Math.PI*2); cx.fill(); });
+  // Stumps
+  cx.shadowBlur=0; cx.strokeStyle='#C8A400'; cx.lineWidth=3;
+  [-10,0,10].forEach(ox=>{ cx.beginPath(); cx.moveTo(x+ox,y+h*0.22); cx.lineTo(x+ox,y+h*0.44); cx.stroke(); });
+  cx.beginPath(); cx.moveTo(x-12,y+h*0.20); cx.lineTo(x+12,y+h*0.20); cx.stroke();
+  // Text
+  cx.font=`bold ${w*0.13}px "Arial Black",Arial`;
+  cx.textAlign='center'; cx.fillStyle='#FFD700';
+  cx.shadowColor='#FFD700'; cx.shadowBlur=8;
+  cx.fillText('GULLY BADSHAH', x, y+h*0.7);
+  cx.shadowBlur=0;
+  cx.restore();
+}
+
+// ── COLOR UTILITIES ───────────────────────────────────────────────────────
+function lightenColor(hex, amt){
+  try{
+    if(hex.length===4) hex=`#${hex[1]}${hex[1]}${hex[2]}${hex[2]}${hex[3]}${hex[3]}`;
+    if(!hex.startsWith('#')||hex.length!==7) return hex;
+    const r=Math.min(255,parseInt(hex.slice(1,3),16)+amt);
+    const g=Math.min(255,parseInt(hex.slice(3,5),16)+amt);
+    const b=Math.min(255,parseInt(hex.slice(5,7),16)+amt);
+    return `rgb(${r|0},${g|0},${b|0})`;
+  }catch(e){return hex;}
+}
+function darkenColor(hex, amt){ return lightenColor(hex,-amt); }
+
+// ── BUTTON SYSTEM ─────────────────────────────────────────────────────────
+function mkBtn(label,x,y,w,h,action,bg='#FFD700',fg='#000',tag=''){
+  return{label,x,y,w,h,action,bg,fg,tag,hover:false};
+}
+function drawBtn(b){
+  cx.save();
+  const hv=b.hover, sc=hv?1.04:1;
+  cx.translate(b.x+b.w/2,b.y+b.h/2); cx.scale(sc,sc); cx.translate(-(b.x+b.w/2),-(b.y+b.h/2));
+  if(hv){cx.shadowColor=b.bg; cx.shadowBlur=20;}
+  const grd=cx.createLinearGradient(b.x,b.y,b.x,b.y+b.h);
+  grd.addColorStop(0, lightenColor(b.bg,hv?40:18));
+  grd.addColorStop(1, hv?b.bg:darkenColor(b.bg,18));
+  cx.fillStyle=grd;
+  cx.beginPath(); cx.roundRect(b.x,b.y,b.w,b.h,b.h/2); cx.fill();
+  cx.strokeStyle=hv?'rgba(255,255,255,0.5)':'rgba(255,255,255,0.15)'; cx.lineWidth=1.5; cx.stroke();
+  cx.font=`bold ${Math.max(11,b.h*0.36)}px "Arial Black",Arial`;
+  cx.textAlign='center'; cx.textBaseline='middle'; cx.fillStyle=b.fg;
+  cx.shadowBlur=0; cx.fillText(b.label,b.x+b.w/2,b.y+b.h/2);
+  cx.textBaseline='alphabetic';
+  cx.restore();
+}
+function checkBtns(){
+  G.btns.forEach(b=>{
+    const hv=G.mouse.x>b.x&&G.mouse.x<b.x+b.w&&G.mouse.y>b.y&&G.mouse.y<b.y+b.h;
+    b.hover=hv;
+    if(hv&&G.mouse.clicked){ Aud.resume(); Aud.click(); b.action&&b.action(); }
+  });
+}
+
+// ── HOME SCREEN ───────────────────────────────────────────────────────────
+function initStars(){
+  G.homeStars=[];
+  for(let i=0;i<120;i++) G.homeStars.push({x:Math.random()*BW,y:Math.random()*BH,vx:(Math.random()-0.5)*0.3,vy:-0.15-Math.random()*0.4,r:0.8+Math.random()*2.5,a:Math.random(),tw:Math.random()*Math.PI*2,c:['#FFD700','#fff','#C8A400','#FFE066'][Math.floor(Math.random()*4)]});
+}
+function updateStars(){ G.homeStars.forEach(s=>{s.x+=s.vx;s.y+=s.vy;s.tw+=0.05;if(s.y<-5){s.y=BH+5;s.x=Math.random()*BW;}if(s.x<-5)s.x=BW+5;if(s.x>BW+5)s.x=-5;}); }
+function drawStars(){ G.homeStars.forEach(s=>{const a=s.a*(0.6+0.4*Math.sin(s.tw));cx.save();cx.globalAlpha=a;cx.fillStyle=s.c;cx.shadowColor=s.c;cx.shadowBlur=s.r*2;cx.beginPath();cx.arc(s.x,s.y,s.r,0,Math.PI*2);cx.fill();cx.restore();}); }
+
+function renderHome(){
+  // Background
+  const bg=cx.createRadialGradient(BW/2,BH/2,80,BW/2,BH/2,BW*0.75);
+  bg.addColorStop(0,'#1a1030'); bg.addColorStop(0.5,'#0d0820'); bg.addColorStop(1,'#000');
+  cx.fillStyle=bg; cx.fillRect(0,0,BW,BH);
+  drawStars();
+
+  // Center glow
+  const cg=cx.createRadialGradient(BW/2,BH/2,0,BW/2,BH/2,380);
+  cg.addColorStop(0,'rgba(255,215,0,0.07)'); cg.addColorStop(1,'transparent');
+  cx.fillStyle=cg; cx.fillRect(0,0,BW,BH);
+
+  // Logo
+  const lz=1+Math.sin(G.t*0.0018)*0.035;
+  cx.save();
+  cx.translate(BW/2,BH/2-140); cx.scale(lz,lz); cx.translate(-BW/2,-(BH/2-140));
+  const gl=15+12*Math.sin(G.t*0.003);
+  if(G.logoLoaded&&G.logoImg){
+    const lw=380;
+    const lh=lw*(G.logoImg.naturalHeight/G.logoImg.naturalWidth)||lw*0.4;
+    cx.save(); cx.globalAlpha=Math.min(1,G.logoAlpha);
+    cx.shadowColor='#FFD700'; cx.shadowBlur=gl;
+    cx.drawImage(G.logoImg,BW/2-lw/2,BH/2-140-lh/2,lw,lh);
+    cx.restore();
+  } else {
+    drawFallbackLogo(BW/2,BH/2-118,360,Math.min(1,G.logoAlpha));
+  }
+  cx.restore();
+
+  // Tagline
+  cx.font='italic 18px "Segoe UI",Arial'; cx.textAlign='center';
+  cx.fillStyle=`rgba(200,164,0,${Math.min(1,G.logoAlpha)*0.9})`;
+  cx.shadowColor='#FFD700'; cx.shadowBlur=8;
+  cx.fillText('Mohalle ka Badshah Banna Hai?', BW/2, BH/2+32);
+  cx.shadowBlur=0;
+
+  // Divider
+  cx.strokeStyle=`rgba(255,215,0,${Math.min(1,G.logoAlpha)*0.4})`; cx.lineWidth=1;
+  cx.beginPath(); cx.moveTo(BW/2-200,BH/2+50); cx.lineTo(BW/2+200,BH/2+50); cx.stroke();
+
+  // Buttons
+  G.btns=[
+    mkBtn('⚡ MOHALLA TOURNAMENT',BW/2-170,BH/2+68,340,56,()=>{
+      initTournament('tournament'); G.state=S.CHAR_SELECT;
+      G.currentVenue=0; Aud.transition();
+    },'#FFD700','#000'),
+  ];
+  if(G.vehairiUnlocked){
+    G.btns.push(mkBtn('🏆 VEHARI CHAMPIONSHIP',BW/2-170,BH/2+140,340,52,()=>{
+      G.state=S.VEHARI; Aud.transition();
+    },'#c084fc','#fff'));
+  } else {
+    // Locked
+    cx.fillStyle='rgba(60,60,80,0.7)';
+    cx.beginPath(); cx.roundRect(BW/2-170,BH/2+140,340,52,26); cx.fill();
+    cx.strokeStyle='#444'; cx.lineWidth=1.5; cx.stroke();
+    cx.font='bold 14px Arial'; cx.fillStyle='#555'; cx.textAlign='center';
+    cx.fillText('🔒 VEHARI CHAMPIONSHIP',BW/2,BH/2+170);
+    cx.font='11px Arial'; cx.fillStyle='#444';
+    cx.fillText('Win Mohalla Tournament to Unlock',BW/2,BH/2+186);
+  }
+  // XP bar
+  if(G.xp>0){
+    const bx=BW/2-160, by=BH/2+208, bw=320, bh=8;
+    cx.fillStyle='#111'; cx.beginPath(); cx.roundRect(bx,by,bw,bh,4); cx.fill();
+    const pct=Math.min(1,G.xp/(G.level*200));
+    const xg=cx.createLinearGradient(bx,by,bx+bw,by);
+    xg.addColorStop(0,'#FFD700'); xg.addColorStop(1,'#ff9500');
+    cx.fillStyle=xg; cx.beginPath(); cx.roundRect(bx,by,bw*pct,bh,4); cx.fill();
+    cx.font='10px Arial'; cx.textAlign='center'; cx.fillStyle='rgba(255,215,0,0.7)';
+    cx.fillText(`Level ${G.level}  •  ${G.xp} XP`,BW/2,by+20);
+  }
+  cx.font='11px Arial'; cx.fillStyle='rgba(255,215,0,0.3)';
+  cx.fillText('SPACE or click to play  •  Voice: Web Speech API  •  Audio: Web Audio API',BW/2,BH-14);
+
+  G.btns.forEach(drawBtn);
+  checkBtns();
+}
+
+// ── CHARACTER SELECT ──────────────────────────────────────────────────────
+function renderCharSelect(){
+  const bg=cx.createLinearGradient(0,0,0,BH);
+  bg.addColorStop(0,'#0a0a1e'); bg.addColorStop(1,'#050510');
+  cx.fillStyle=bg; cx.fillRect(0,0,BW,BH);
+  drawStars();
+
+  cx.font='bold 28px "Arial Black",Arial'; cx.textAlign='center';
+  cx.fillStyle='#FFD700'; cx.shadowColor='#FFD700'; cx.shadowBlur=15;
+  cx.fillText('APNA KHILADI CHUNO', BW/2, 50); cx.shadowBlur=0;
+  cx.font='13px Arial'; cx.fillStyle='#888';
+  cx.fillText('Choose your character for this tournament', BW/2, 72);
+
+  // Grid 5 x 2
+  const cols=5, cardW=210, cardH=170, gap=18;
+  const totalW=cols*cardW+(cols-1)*gap;
+  const startX=(BW-totalW)/2, startY=90;
+
+  CHARS.forEach((ch,idx)=>{
+    const col=idx%cols, row=Math.floor(idx/cols);
+    const cx2=startX+col*(cardW+gap), cy2=startY+row*(cardH+gap);
+    const isHov=G.mouse.x>cx2&&G.mouse.x<cx2+cardW&&G.mouse.y>cy2&&G.mouse.y<cy2+cardH;
+    const isSel=G.selectedChar?.id===ch.id;
+
+    cx.save();
+    if(isSel){cx.shadowColor=ch.color;cx.shadowBlur=25;}
+    cx.fillStyle=isSel?'#141428':isHov?'#0e0e22':'#0a0a1a';
+    cx.beginPath(); cx.roundRect(cx2,cy2,cardW,cardH,12); cx.fill();
+    cx.strokeStyle=isSel?ch.color:isHov?'rgba(255,215,0,0.5)':'rgba(255,255,255,0.07)';
+    cx.lineWidth=isSel?3:1.5; cx.stroke(); cx.shadowBlur=0;
+
+    // Color bar top
+    cx.fillStyle=ch.color;
+    cx.beginPath(); cx.roundRect(cx2,cy2,cardW,5,[12,12,0,0]); cx.fill();
+
+    // Character portrait (detailed)
+    drawCharPortrait(cx2+cardW/2, cy2+58, ch, 34);
+
+    // Name
+    cx.font='bold 14px Arial'; cx.textAlign='center';
+    cx.fillStyle=isSel?ch.color:'#fff';
+    cx.fillText(ch.name, cx2+cardW/2, cy2+100);
+    cx.font='11px Arial'; cx.fillStyle='#666';
+    cx.fillText(ch.role, cx2+cardW/2, cy2+114);
+
+    // Stats bars
+    [['BAT',ch.stats.bat],['BOW',ch.stats.bowl],['SPD',ch.stats.spd]].forEach(([lbl,val],si)=>{
+      const bx=cx2+8+si*((cardW-16)/3);
+      const bw=(cardW-16)/3-4, bby=cy2+cardH-42;
+      cx.font='8px Arial'; cx.fillStyle='#555'; cx.textAlign='left';
+      cx.fillText(lbl,bx,bby-2);
+      cx.fillStyle='#1a1a2e'; cx.beginPath(); cx.roundRect(bx,bby,bw,7,3.5); cx.fill();
+      const fg=cx.createLinearGradient(bx,bby,bx+bw,bby);
+      fg.addColorStop(0,ch.color); fg.addColorStop(1,lightenColor(ch.color,30));
+      cx.fillStyle=fg; cx.beginPath(); cx.roundRect(bx,bby,bw*(val/100),7,3.5); cx.fill();
+    });
+
+    // Special ability badge
+    cx.font='9px Arial'; cx.textAlign='center'; cx.fillStyle='#FFD700';
+    cx.fillText(`★ ${ch.special}`, cx2+cardW/2, cy2+cardH-8);
+    cx.restore();
+
+    if(G.mouse.clicked&&isHov){ G.selectedChar=ch; Aud.click(); }
+  });
+
+  // Bottom buttons
+  G.btns=[mkBtn('◀ Back',20,18,100,34,()=>{G.state=S.HOME;Aud.click();},'#333333','#cccccc')];
+  if(G.selectedChar){
+    G.btns.push(mkBtn(`▶ CHALEIN! (${G.selectedChar.name})`,BW/2-160,BH-62,320,48,()=>{
+      G.state=S.PERMISSION; G.permLine=0; G.permTimer=0;
+      Vox.play(G.selectedChar.perm[0],'calm'); Aud.transition();
+    },G.selectedChar.color,'#000'));
+  }
+  G.btns.forEach(drawBtn); checkBtns();
+}
+
+function drawCharPortrait(x,y,char,r){
+  cx.save();
+  const grd=cx.createRadialGradient(x,y,0,x,y,r);
+  grd.addColorStop(0,char.color+'55'); grd.addColorStop(1,'transparent');
+  cx.fillStyle=grd; cx.beginPath(); cx.arc(x,y,r,0,Math.PI*2); cx.fill();
+  // Body
+  cx.fillStyle=char.kitColor||char.color;
+  cx.beginPath(); cx.roundRect(x-r*0.4,y+r*0.05,r*0.8,r*0.75,3); cx.fill();
+  // Head
+  cx.fillStyle='#c68642'; cx.beginPath(); cx.arc(x,y-r*0.45,r*0.38,0,Math.PI*2); cx.fill();
+  // Helmet
+  cx.fillStyle=char.helmetColor||'#222';
+  cx.beginPath(); cx.arc(x,y-r*0.5,r*0.36,Math.PI,0); cx.fill();
+  cx.fillRect(x-r*0.38,y-r*0.62,r*0.76,r*0.12);
+  // Initial
+  cx.font=`bold ${r*0.55}px "Arial Black"`;
+  cx.textAlign='center'; cx.fillStyle='#fff'; cx.fillText(char.name[0],x,y+r*0.65);
+  cx.restore();
+}
+
+// ── PERMISSION SCENE ──────────────────────────────────────────────────────
+function renderPermission(){
+  const char=G.selectedChar; if(!char){G.state=S.CHAR_SELECT;return;}
+  cx.fillStyle='#000'; cx.fillRect(0,0,BW,BH);
+  const bg=cx.createRadialGradient(BW/2,BH/2,0,BW/2,BH/2,700);
+  bg.addColorStop(0,'rgba(20,15,35,0.95)'); bg.addColorStop(1,'#000');
+  cx.fillStyle=bg; cx.fillRect(0,0,BW,BH);
+
+  // Cinematic bars
+  cx.fillStyle='#000'; cx.fillRect(0,0,BW,55); cx.fillRect(0,BH-55,BW,55);
+
+  // Scene label
+  cx.font='bold 12px Arial'; cx.textAlign='center'; cx.fillStyle='rgba(255,215,0,0.6)';
+  cx.fillText('PERMISSION SCENE', BW/2, 38);
+
+  // Big character portrait left
+  const px=BW/2-250, py=BH/2-80;
+  cx.save();
+  cx.shadowColor=char.color; cx.shadowBlur=40;
+  cx.fillStyle=char.color+'20';
+  cx.beginPath(); cx.arc(px,py+10,110,0,Math.PI*2); cx.fill();
+  cx.restore();
+  drawCharPortrait(px,py,char,90);
+  cx.font='bold 22px Arial'; cx.textAlign='center';
+  cx.fillStyle=char.color; cx.shadowColor=char.color; cx.shadowBlur=12;
+  cx.fillText(char.name,px,py+120); cx.shadowBlur=0;
+  cx.font='13px Arial'; cx.fillStyle='#888'; cx.fillText(char.role,px,py+138);
+
+  // Dialogue box
+  const lines=char.perm;
+  const dl=lines[Math.min(G.permLine,lines.length-1)];
+  const isLast=G.permLine>=lines.length-1;
+  const dbX=BW/2-50, dbY=BH/2-80, dbW=520, dbH=100;
+  cx.fillStyle='rgba(0,0,0,0.92)';
+  cx.beginPath(); cx.roundRect(dbX,dbY,dbW,dbH,12); cx.fill();
+  cx.strokeStyle=isLast?'#ff4444':char.color; cx.lineWidth=2.5; cx.stroke();
+
+  // Parent icon (right side of scene)
+  const npX=BW/2+280, npY=BH/2;
+  if(G.permLine>0){
+    cx.fillStyle='#555'; cx.beginPath(); cx.arc(npX,npY-50,35,0,Math.PI*2); cx.fill();
+    cx.fillStyle='#c68642'; cx.beginPath(); cx.arc(npX,npY-52,28,0,Math.PI*2); cx.fill();
+    cx.fillStyle='#888'; cx.beginPath(); cx.arc(npX,npY-52,28,Math.PI,0); cx.fill();
+    cx.fillStyle='#2a2a3a'; cx.beginPath(); cx.roundRect(npX-30,npY-20,60,65,4); cx.fill();
+    cx.font='10px Arial'; cx.textAlign='center'; cx.fillStyle='#aaa';
+    const speakerName=dl.split(':')[0]||'Parent';
+    cx.fillText(speakerName, npX, npY+55);
+  }
+
+  // Arrow/tail
+  cx.fillStyle='rgba(0,0,0,0.92)';
+  cx.beginPath(); cx.moveTo(dbX-2,dbY+30); cx.lineTo(dbX-16,dbY+22); cx.lineTo(dbX-2,dbY+48); cx.fill();
+
+  // Dialogue text
+  cx.font='bold 16px "Segoe UI",Arial'; cx.textAlign='left';
+  cx.fillStyle=isLast?'#ffa0a0':'#fff';
+  wrapText2(dl||'', dbX+dbW/2, dbY+30, dbW-24, 26, 15);
+
+  // Progress dots
+  lines.forEach((_,i)=>{ cx.fillStyle=i<=G.permLine?char.color:'#222'; cx.beginPath(); cx.arc(BW/2+(i-lines.length/2+0.5)*24,dbY+dbH+24,7,0,Math.PI*2); cx.fill(); });
+
+  G.btns=[mkBtn(
+    G.permLine<lines.length-1?'Next ▶':"Let's Play! ▶",
+    BW/2-110,BH-100,220,44,
+    ()=>{
+      if(G.permLine<lines.length-1){ G.permLine++; Vox.play(lines[G.permLine],G.permLine===lines.length-1?'dramatic':'calm'); Aud.click(); }
+      else { setupMatchIntro(); G.state=S.INTRO; Aud.transition(); }
+    }, char.color, '#000')];
+  G.btns.forEach(drawBtn); checkBtns();
+}
+
+// ── MATCH INTRO ───────────────────────────────────────────────────────────
+function setupMatchIntro(){
+  const opp=nextOpp();
+  const oppName=opp?opp.opp.name:'Opponent';
+  const playerName=G.selectedChar?`${G.selectedChar.name}'s XI`:'Player XI';
+  G.match=mkMatch(playerName,oppName,G.matchMode==='vehari'?10:6,true);
+  G.introTimer=0;
+  if(opp) G.currentVenue=opp.opp.venueIdx||0;
+}
+
+function renderIntro(){
+  G.introTimer+=G.dt;
+  const prog=Math.min(1,G.introTimer/4000);
+  cx.fillStyle='#000'; cx.fillRect(0,0,BW,BH);
+  drawVenue(G.currentVenue);
+
+  // Dark overlay
+  cx.fillStyle=`rgba(0,0,0,${0.75-prog*0.2})`; cx.fillRect(0,0,BW*0.68,BH);
+
+  if(prog<0.4){
+    const p=prog/0.4;
+    if(G.logoLoaded&&G.logoImg){
+      const lw=320, lh=lw*(G.logoImg.naturalHeight/G.logoImg.naturalWidth)||lw*0.45;
+      cx.save(); cx.globalAlpha=p*p; cx.shadowColor='#FFD700'; cx.shadowBlur=30+20*Math.sin(G.t*0.005);
+      cx.drawImage(G.logoImg,BW*0.34-lw/2,BH*0.5-lh/2,lw,lh);
+      cx.restore();
+    } else drawFallbackLogo(BW*0.34,BH*0.5,280,p*p);
+  } else {
+    if(G.logoLoaded&&G.logoImg){
+      const lw=160;
+      const lh=lw*(G.logoImg.naturalHeight/G.logoImg.naturalWidth)||lw*0.45;
+      cx.save(); cx.globalAlpha=0.9; cx.shadowColor='#FFD700'; cx.shadowBlur=12;
+      cx.drawImage(G.logoImg,BW*0.34-lw/2,55,lw,lh);
+      cx.restore();
+    }
+    const p2=(prog-0.4)/0.6;
+    cx.save(); cx.globalAlpha=Math.min(1,p2*2);
+    cx.font='bold 40px "Arial Black"'; cx.textAlign='center'; cx.fillStyle='#FFD700';
+    cx.shadowColor='#FFD700'; cx.shadowBlur=20;
+    cx.fillText(G.match.playerName,BW*0.34,BH*0.42); cx.shadowBlur=0;
+    cx.font='bold 22px Arial'; cx.fillStyle='#888'; cx.fillText('VS',BW*0.34,BH*0.5);
+    cx.font='bold 36px "Arial Black"'; cx.fillStyle='#ff4444';
+    cx.shadowColor='#ff4444'; cx.shadowBlur=15;
+    cx.fillText(G.match.oppName,BW*0.34,BH*0.6); cx.shadowBlur=0;
+    cx.font='16px Arial'; cx.fillStyle='#aaa';
+    const ml=G.matchMode==='vehari'?'Vehari City Championship':'Mohalla Tournament';
+    cx.fillText(`${ml} • ${G.match.overs} Overs • ${VENUES[G.currentVenue].name}`,BW*0.34,BH*0.7);
+    cx.restore();
+    if(p2>0.7){
+      G.btns=[mkBtn('TOSS KA WAQT! ▶',BW*0.34-130,BH*0.83,260,50,()=>{
+        G.state=S.TOSS; G.tossCoin={angle:0,phase:'wait',flipTimer:0,choice:null,result:null};
+        Vox.play(`Match shuru! ${G.match.playerName} vs ${G.match.oppName}`,'hype');
+      },'#FFD700','#000')];
+      G.btns.forEach(drawBtn); checkBtns();
+    }
+  }
+}
+
+// ── TOSS ──────────────────────────────────────────────────────────────────
+function renderToss(){
+  cx.fillStyle='#07071a'; cx.fillRect(0,0,BW,BH);
+  drawStars();
+  cx.font='bold 28px "Arial Black"'; cx.textAlign='center';
+  cx.fillStyle='#FFD700'; cx.shadowColor='#FFD700'; cx.shadowBlur=15;
+  cx.fillText('TOSS KA WAQT!',BW/2,70); cx.shadowBlur=0;
+
+  const tc=G.tossCoin;
+  if(tc.phase==='wait'){
+    tc.angle+=0.025;
+    drawCoin3D(BW/2,BH/2-50,65,tc.angle);
+    cx.font='16px Arial'; cx.fillStyle='#ccc'; cx.fillText('Choose Heads or Tails',BW/2,BH/2+35);
+    G.btns=[
+      mkBtn('HEADS',BW/2-145,BH/2+60,135,50,()=>startTossFlip('heads'),'#FFD700','#000'),
+      mkBtn('TAILS',BW/2+10, BH/2+60,135,50,()=>startTossFlip('tails'),'#555555','#ffffff'),
+    ];
+  } else if(tc.phase==='flip'){
+    tc.flipTimer+=G.dt;
+    tc.angle+=0.18+tc.flipTimer*0.0005;
+    const arcY=BH/2-50-Math.sin(Math.min(1,tc.flipTimer/900)*Math.PI)*80;
+    drawCoin3D(BW/2,arcY,65,tc.angle);
+    G.btns=[];
+    if(tc.flipTimer>1600){
+      tc.phase='result';
+      tc.result=Math.random()<0.5?'heads':'tails';
+      G.tossPlayerWon=tc.result===tc.choice;
+      Aud.crowd(G.tossPlayerWon?0.9:0.3);
+      Vox.play(G.tossPlayerWon?'Toss jeet liya! Aap choose karo!':'Toss haar gaye, lekin match toh khelna hai!',G.tossPlayerWon?'hype':'calm');
+    }
+  } else { // result
+    drawCoin3D(BW/2,BH/2-70,65,tc.angle);
+    cx.font='bold 24px Arial'; cx.textAlign='center';
+    cx.fillStyle=tc.result==='heads'?'#FFD700':'#ccc';
+    cx.fillText(tc.result.toUpperCase(),BW/2,BH/2);
+    cx.font='bold 22px Arial';
+    cx.fillStyle=G.tossPlayerWon?'#22c55e':'#ff4444';
+    cx.fillText(G.tossPlayerWon?'Toss Jeet Gaye! 🎉':'Toss Haar Gaye',BW/2,BH/2+35);
+    if(G.tossPlayerWon){
+      cx.font='15px Arial'; cx.fillStyle='#FFD700';
+      cx.fillText('Bat First ya Bowl First?',BW/2,BH/2+65);
+      G.btns=[
+        mkBtn('🏏 BAT FIRST',BW/2-155,BH/2+85,145,50,()=>{G.match.playerBatFirst=true;startMatch();},'#22c55e','#fff'),
+        mkBtn('🎯 BOWL FIRST',BW/2+10, BH/2+85,145,50,()=>{G.match.playerBatFirst=false;startMatch();},'#3b82f6','#fff'),
+      ];
+    } else {
+      const oC=Math.random()<0.5?'bat':'bowl';
+      G.match.playerBatFirst=oC==='bowl';
+      cx.font='15px Arial'; cx.fillStyle='#aaa';
+      cx.fillText(`${G.match.oppName} chose to ${oC} first`,BW/2,BH/2+65);
+      G.btns=[mkBtn("Let's Go! ▶",BW/2-90,BH/2+88,180,50,()=>startMatch(),'#FFD700','#000')];
+    }
+  }
+  G.btns.forEach(drawBtn); checkBtns();
+}
+function startTossFlip(choice){ G.tossCoin.choice=choice; G.tossCoin.phase='flip'; G.tossCoin.flipTimer=0; Aud.click(); }
+
+function drawCoin3D(x,y,r,angle){
+  const scx=Math.abs(Math.cos(angle));
+  cx.save(); cx.translate(x,y); cx.scale(scx,1); cx.translate(-x,-y);
+  const grd=cx.createRadialGradient(x-r*0.3,y-r*0.3,r*0.05,x,y,r);
+  grd.addColorStop(0,'#FFF566'); grd.addColorStop(0.5,'#FFD700'); grd.addColorStop(1,'#A07800');
+  cx.fillStyle=grd; cx.shadowColor='#FFD700'; cx.shadowBlur=25;
+  cx.beginPath(); cx.arc(x,y,r,0,Math.PI*2); cx.fill(); cx.shadowBlur=0;
+  cx.strokeStyle='#A07800'; cx.lineWidth=3; cx.stroke();
+  // Emboss edge ring
+  cx.strokeStyle='rgba(255,255,255,0.3)'; cx.lineWidth=3;
+  cx.beginPath(); cx.arc(x,y,r-4,0,Math.PI*2); cx.stroke();
+  // Face
+  cx.font=`bold ${r*0.52}px "Arial Black"`;
+  cx.textAlign='center'; cx.fillStyle='#8B6914';
+  cx.fillText(Math.cos(angle)>0?'H':'T', x, y+r*0.18);
+  cx.restore();
+}
+
+// ── MATCH START ───────────────────────────────────────────────────────────
+function startMatch(){
+  G.match.curInn=0;
+  G.state=S.BATTING; // will immediately switch based on batting
+  beginNextDelivery();
+  const mode=playerBatting(G.match)?'batting':'bowling';
+  Vox.play(`${mode==='batting'?'Batting':'Bowling'} shuru! Ready ho jao!`,'hype');
+  Coach.say('good_start'); Aud.crowd(0.5);
+}
+
+const DELIV_TYPES=['Yorker','Bouncer','Swing','Spinner','Googly','Slower','Normal'];
+
+function beginNextDelivery(){
+  const m=G.match;
+  const i=inn(m);
+  // Check end
+  if(i.wkts>=10||i.ovrs>=m.overs){
+    const e=checkInnEnd(m);
+    if(e==='inn_break'){ G.state=S.INN_BREAK; Vox.play(`First innings over! Target: ${m.target} runs!`,'dramatic'); Aud.crowd(0.5); return; }
+    if(e==='match_over'){ endMatch(); return; }
+  }
+  if(playerBatting(m)){
+    G.state=S.BATTING;
+    m.bat.mAngle=Math.random()*Math.PI*0.5;
+    m.bat.sweetA=0.5+Math.random()*Math.PI*1.5;
+    m.bat.sweetW=0.4+Math.random()*0.3;
+    m.bat.goodW=1.2+Math.random()*0.4;
+    m.bat.mSpeed=1.8+G.level*0.08+(i.ovrs>m.overs*0.7?0.4:0);
+    m.bat.canSwing=false; m.bat.ballIncoming=true; m.bat.ballProg=0;
+    m.bat.swingResult=null; m.bat.swingTimer=0;
+    m.bat.delivType=DELIV_TYPES[Math.floor(Math.random()*6)];
+    m.bat.trail=[]; m.bat._bouncePlayed=false;
+    m.bat.shotTrajectory=null; m.bat.shotTimer=0;
+    if(m.bat.dotCount>=4) Coach.say('dot_balls');
+  } else {
+    G.state=S.BOWLING;
+    m.bowl.phase='select'; m.bowl.aimX=PITCH_CX; m.bowl.aimY=PITCH_NEAR_Y-150;
+    m.bowl.delivProg=0; m.bowl.aiResult=null; m.bowl.aiTimer=0;
+  }
+  if(!G.eventActive && i.balls===0 && i.ovrs>0 && i.ovrs%3===0 && Math.random()<0.5) spawnEvent();
+}
+
+function spawnEvent(){
+  const EVENTS=[
+    {id:'aunty',title:'Aunty Nasreen!',desc:'Cricket mat khelo, chai pi lo!',icon:'👩',voice:"Arey bhai, thoda break lo chai pi lo!",tone:'funny'},
+    {id:'dog',title:'Dog on Pitch!',desc:'Ek kutta maidan mein aa gaya!',icon:'🐕',voice:"Ek kutta aa gaya maidan mein! Match ruka!",tone:'funny'},
+    {id:'police',title:'Police Inspection!',desc:'Constable Sahab aa gaye!',icon:'👮',voice:"Constable Sahab inspection karne aa gaye!",tone:'dramatic'},
+    {id:'rain',title:'Rain Delay!',desc:'Baarish ne match roka!',icon:'🌧',voice:"Baarish! Thodi der ke liye match ruka!",tone:'calm'},
+    {id:'power',title:'Power Cut!',desc:'Bijli chali gayi!',icon:'⚡',voice:"Bijli gayi! Par cricket dhoop mein hota hai!",tone:'funny'},
+    {id:'car',title:'Broken Window!',desc:'Ball se khidki toot gayi!',icon:'🚗',voice:"Arre bhai! Gaadi ki khidki toot gayi!",tone:'dramatic'},
+    {id:'guddu',title:'Toddler Guddu!',desc:'Guddu ne maidan mein dhaawa bol diya!',icon:'👶',voice:"Guddu bhai aa gaye! Mujhe bhi khelna hai!",tone:'funny'},
+  ];
+  const e=EVENTS[Math.floor(Math.random()*EVENTS.length)];
+  G.eventActive=true; G.eventData=e; G.eventTimer=4000;
+  Vox.play(e.voice,e.tone); Aud.crowd(0.3);
+}
+
+// ── BATTING RESULT ────────────────────────────────────────────────────────
+function processBatHit(runs, timing){
+  const m=G.match;
+  nextBall(m);
+  const isWkt=runs==='W';
+  if(isWkt){
+    addWkt(m); Aud.wicket(); Aud.crowd(0.8);
+    m.bat.swingText='OUT! ❌'; m.bat.swingColor='#ff4444'; m.bat.swingTimer=200;
+    const c=cmt('wicket'); Vox.play(c,'dramatic'); m.lastCmt=c; m.cmt_t=2500;
+    Ptcl.spawn(PITCH_CX,PITCH_NEAR_Y-80,'#ff4444',28,60,4);
+    Coach.say('wicket'); G.runFlash={text:'WICKET! ❌',color:'#ff4444',timer:140};
+  } else {
+    addRuns(m,runs);
+    if(runs===6){ Aud.six(); Ptcl.spawnGold(PITCH_CX,PITCH_NEAR_Y-80,50); m.bat.swingText='SIX! 💥'; m.bat.swingColor='#22c55e'; Coach.say('six'); G.runFlash={text:'SIX! 💥',color:'#22c55e',timer:160}; m.bat.shotTrajectory={ctrlX:0,ctrlY:200,endX:0,endY:-350,arcH:100}; }
+    else if(runs===4){ Aud.four(); Ptcl.spawn(PITCH_CX,PITCH_NEAR_Y-80,'#3b82f6',20,60,3); m.bat.swingText='FOUR! ✓'; m.bat.swingColor='#3b82f6'; G.runFlash={text:'FOUR! 💙',color:'#3b82f6',timer:140}; m.bat.shotTrajectory={ctrlX:(m.bat.shotDir-2.5)*60,ctrlY:80,endX:(m.bat.shotDir-2.5)*220,endY:80,arcH:30}; }
+    else if(runs>0){ m.bat.swingText=`${runs} RUN${runs>1?'S':''}!`; m.bat.swingColor='#FFD700'; G.runFlash={text:`+${runs}`,color:'#FFD700',timer:110}; m.bat.shotTrajectory={ctrlX:(m.bat.shotDir-2.5)*40,ctrlY:40,endX:(m.bat.shotDir-2.5)*100,endY:40,arcH:15}; }
+    else { m.bat.swingText='DOT BALL'; m.bat.swingColor='#888'; G.runFlash={text:'●',color:'#888',timer:90}; const c=cmt('dot'); Vox.play(c,'calm'); m.lastCmt=c; m.cmt_t=2000; }
+    m.bat.swingTimer=200;
+  }
+  m.bat.swingResult=runs; m.bat.ballIncoming=false; m.bat.canSwing=false;
+  m.bat.shotTimer=0;
+
+  // Check milestones
+  const ir=inn(m).runs;
+  if(ir>=50&&ir-runs<50){ Vox.play(cmt('milestone50'),'hype'); Aud.cheer(); }
+  if(ir>=100&&ir-runs<100){ Vox.play(cmt('milestone100'),'hype'); Ptcl.spawnGold(PITCH_CX,PITCH_NEAR_Y-100,80); Aud.six(); }
+
+  const e=checkInnEnd(m);
+  if(e==='inn_break'){G.state=S.INN_BREAK;return;}
+  if(e==='match_over'){endMatch();return;}
+  if(m.curInn===1&&m.target&&inn(m).runs>=m.target){endMatch();return;}
+
+  // Over complete?
+  const justOver=inn(m).balls===0&&inn(m).ovrs>0;
+  setTimeout(()=>{
+    if(G.state!==S.BATTING&&G.state!==S.BOWLING) return;
+    if(justOver) showOverBreak(m);
+    else beginNextDelivery();
+  },1100);
+}
+
+// ── BOWLING RESULT ────────────────────────────────────────────────────────
+function processBowlDelivery(m){
+  const dType=DELIV_TYPES[m.bowl.selType]||'Normal';
+  const ai=aiBat(dType);
+  m.bowl.aiResult=ai; m.bowl.aiTimer=900;
+  nextBall(m);
+  const runs=ai==='W'?0:parseInt(ai)||0;
+  const shouldFld=ai!=='W'&&runs>0&&runs<=3&&Math.random()<0.35;
+
+  if(ai==='W'){
+    addWkt(m); Aud.wicket(); Aud.crowd(0.85);
+    Vox.play(cmt('wicket'),'dramatic'); Coach.say('six');
+    Ptcl.spawn(PITCH_CX,PITCH_NEAR_Y-80,'#22c55e',25,60,4);
+    G.runFlash={text:'WICKET! ✅',color:'#22c55e',timer:150};
+  } else {
+    addRuns(m,runs);
+    if(runs===6){Aud.six();Ptcl.spawn(PITCH_CX,PITCH_NEAR_Y-80,'#ff4444',20,60,3);Coach.say('wicket');G.runFlash={text:'SIX! 😱',color:'#ff4444',timer:150};}
+    else if(runs===4){Aud.four();G.runFlash={text:'FOUR! 😬',color:'#ff6b35',timer:130};}
+    else if(runs>0){G.runFlash={text:`+${runs}`,color:'#ff9966',timer:90};}
+    else{G.runFlash={text:'DOT! ✓',color:'#22c55e',timer:80};}
+  }
+
+  const e=checkInnEnd(m);
+  if(e==='inn_break'){G.state=S.INN_BREAK;return;}
+  if(e==='match_over'){endMatch();return;}
+  if(m.curInn===1&&m.target&&inn(m).runs>=m.target){endMatch();return;}
+
+  const justOver=inn(m).balls===0&&inn(m).ovrs>0;
+  setTimeout(()=>{
+    if(G.state!==S.BATTING&&G.state!==S.BOWLING) return;
+    m.bowl.phase='select'; m.bowl.aiResult=null;
+    if(shouldFld&&!m.fld.active){
+      m.fld.active=true; m.fld.type=Math.random()<0.6?'runout':'catch';
+      m.fld.mPos=0.15+Math.random()*0.3; m.fld.mDir=Math.random()<0.5?1:-1;
+      m.fld.mSpd=0.013+Math.random()*0.007; m.fld.timer=90+Math.floor(Math.random()*35);
+      m.fld.ballX=PITCH_CX+80; m.fld.ballY=PITCH_FAR_Y;
+      m.fld.ballTX=PITCH_CX; m.fld.ballTY=PITCH_NEAR_Y-40; m.fld.prog=0; m.fld.result=null;
+      G.state=S.FIELDING;
+      Vox.play(m.fld.type==='catch'?'Catch ka mauka! Green zone mein click karo!':'Run out! Jaldi click karo!','hype');
+    } else if(justOver){ showOverBreak(m); }
+    else { beginNextDelivery(); }
+  },1400);
+}
+
+// ── FIELDING RESOLVE ──────────────────────────────────────────────────────
+function resolveFielding(m){
+  if(!m.fld.active) return;
+  const p=m.fld.mPos;
+  const inGold=p>0.42&&p<0.58, inGreen=p>0.35&&p<0.65;
+  m.fld.active=false;
+  const success=inGold||(inGreen&&Math.random()<0.75);
+  if(success&&!playerBatting(m)){
+    addWkt(m); Aud.wicket();
+    Ptcl.spawnGold(PITCH_CX,PITCH_NEAR_Y-80,25);
+    G.runFlash={text:m.fld.type==='catch'?'CAUGHT! 🎯':'RUN OUT! 🎯',color:'#22c55e',timer:150};
+    Vox.play(m.fld.type==='catch'?'Kamaal catch! OUT!':'Run out! Shandaar fielding!','hype'); Coach.say('six');
+  } else {
+    Aud.bat(0.3); G.runFlash={text:'SAFE! 😅',color:'#f97316',timer:100};
+    Vox.play('Bachh gaya! Achi daud!','funny');
+  }
+  G.state=S.BOWLING;
+  const e=checkInnEnd(m);
+  if(e==='inn_break'){G.state=S.INN_BREAK;return;}
+  if(e==='match_over'){endMatch();return;}
+  setTimeout(()=>{ if(G.state===S.BOWLING) beginNextDelivery(); },1000);
+}
+
+// ── OVER BREAK ────────────────────────────────────────────────────────────
+function showOverBreak(m){
+  const i=inn(m); const last6=i.hist.slice(-6);
+  const ovRuns=last6.reduce((s,b)=>s+(b==='W'||b==='●'?0:parseInt(b)||0),0);
+  const ovWkts=last6.filter(b=>b==='W').length;
+  G.overBreakData={overNum:i.ovrs,runs:ovRuns,wkts:ovWkts,balls:last6,timer:2800};
+  Vox.play(`Over ${i.ovrs} complete — ${ovRuns} runs, ${ovWkts} wicket${ovWkts!==1?'s':''}!`,'calm');
+  G.state=S.OVER_BREAK;
+  setTimeout(()=>{ G.overBreakData=null; if(G.state===S.OVER_BREAK) beginNextDelivery(); },2900);
+}
+
+// ── END MATCH ─────────────────────────────────────────────────────────────
+function endMatch(){
+  const m=G.match; const res=matchResult(m); const won=res.winner==='player';
+  const xpGain=won?120+G.level*10:40;
+  G.xp+=xpGain; if(G.xp>=G.level*200) G.level++;
+  if(G.tournament){
+    const cur=G.tournament.schedule.find(s=>!s.played);
+    if(cur){cur.played=true;cur.result=res;}
+    if(won)G.tournament.wins++; else G.tournament.losses++;
+  }
+  G.resultData={result:res,xpGain,match:m};
+  G.state=S.RESULT;
+  Aud.crowd(won?1.0:0.3);
+  if(won){Aud.cheer();Ptcl.spawnGold(BW/2,BH/2,80);}
+  Vox.play(won?'MATCH JEET LIYA! BADSHAH HO TUM!':'Haar gaye is baar, seekh lo!',won?'hype':'dramatic');
+  Coach.say(won?'six':'collapse');
+}
+
+// ── MAIN MATCH RENDERER ───────────────────────────────────────────────────
+function renderMatch(){
+  const m=G.match; if(!m) return;
+  const v=VENUES[G.currentVenue];
+
+  // Background
+  cx.fillStyle='#000'; cx.fillRect(0,0,BW,BH);
+  drawVenue(G.currentVenue);
+  drawPerspectivePitch(v);
+  drawFielders();
+
+  // Core gameplay
+  if(G.state===S.BATTING) drawBattingUI(m);
+  else if(G.state===S.BOWLING||G.state===S.FIELDING) { drawBowlingUI(m); drawFieldingUI(m); }
+
+  // Scoreboard
+  drawScoreboard(m);
+
+  // Run flash
+  if(G.runFlash.timer>0){
+    cx.save(); cx.globalAlpha=Math.min(1,G.runFlash.timer/40);
+    cx.font='bold 58px "Arial Black",Arial'; cx.textAlign='center';
+    cx.fillStyle=G.runFlash.color; cx.shadowColor=G.runFlash.color; cx.shadowBlur=30;
+    cx.fillText(G.runFlash.text,BW*0.34,BH*0.26); cx.restore();
+    G.runFlash.timer--;
+  }
+
+  // Timing flash
+  if(G.timingFlash.timer>0){
+    cx.save(); cx.globalAlpha=Math.min(1,G.timingFlash.timer/20);
+    cx.font='bold 28px Arial'; cx.textAlign='center';
+    cx.fillStyle=G.timingFlash.color; cx.shadowColor=G.timingFlash.color; cx.shadowBlur=16;
+    cx.fillText(G.timingFlash.text, BW*0.34, BH*0.38); cx.restore();
+    G.timingFlash.timer--;
+  }
+
+  // Badshah Factor
+  if(G.badshah.active){
+    cx.save(); cx.globalAlpha=G.badshah.timer/90;
+    cx.fillStyle='rgba(0,0,0,0.65)'; cx.fillRect(0,0,BW*0.68,BH);
+    cx.font='bold 52px "Arial Black"'; cx.textAlign='center';
+    cx.fillStyle='#FFD700'; cx.shadowColor='#FFD700'; cx.shadowBlur=50;
+    cx.fillText('⚜ BADSHAH FACTOR! ⚜',BW*0.34,BH*0.45); cx.shadowBlur=0;
+    cx.font='bold 20px Arial'; cx.fillStyle='#fff';
+    cx.fillText('Miracle shot incoming!',BW*0.34,BH*0.54);
+    cx.restore(); G.badshah.timer--;
+    if(G.badshah.timer<=0) G.badshah.active=false;
+  }
+
+  // Commentary bar
+  if(m.cmt_t>0){
+    cx.save(); cx.globalAlpha=Math.min(1,m.cmt_t/300);
+    cx.fillStyle='rgba(0,0,0,0.88)';
+    cx.beginPath(); cx.roundRect(8,BH-46,BW*0.67,36,8); cx.fill();
+    cx.font='bold 12px Arial'; cx.textAlign='left'; cx.fillStyle='#FFD700';
+    cx.fillText(`🎙 Chai Wala Akbar: "${m.lastCmt}"`,14,BH-23); cx.restore();
+    m.cmt_t-=G.dt;
+  }
+
+  // Event overlay
+  if(G.eventActive&&G.eventData){ drawEventOverlay(G.eventData); G.eventTimer-=G.dt; if(G.eventTimer<=0){G.eventActive=false;G.eventData=null;} }
+
+  // Target bar (2nd inn batting)
+  if(m.curInn===1&&m.target&&playerBatting(m)){
+    const i2=inn(m), need=m.target-i2.runs, bl=m.overs*6-(i2.ovrs*6+i2.balls);
+    const pct=Math.max(0,Math.min(1,i2.runs/m.target));
+    const barX=10, barY=BH*0.68, barW=BW*0.66, barH=14;
+    cx.fillStyle='rgba(0,0,0,0.7)'; cx.beginPath(); cx.roundRect(barX-3,barY-3,barW+6,barH+6,8); cx.fill();
+    cx.fillStyle='#1a1a2e'; cx.beginPath(); cx.roundRect(barX,barY,barW,barH,7); cx.fill();
+    const urgent=need>0&&bl>0&&need/bl>2.5;
+    const fc=pct>=1?'#22c55e':urgent?'#ef4444':'#3b82f6';
+    cx.fillStyle=fc; cx.beginPath(); cx.roundRect(barX,barY,barW*pct,barH,7); cx.fill();
+    cx.font='bold 11px Arial'; cx.textAlign='center'; cx.fillStyle='#fff';
+    cx.fillText(need>0?`Need ${need} from ${bl} balls`:'TARGET REACHED!', barX+barW/2, barY+10);
+  }
+
+  // Controls help toggle
+  const hbX=BW*0.685-38, hbY=8;
+  cx.fillStyle=G.showHelp?'#FFD700':'rgba(20,20,50,0.9)';
+  cx.beginPath(); cx.roundRect(hbX,hbY,30,30,8); cx.fill();
+  cx.strokeStyle='#FFD700'; cx.lineWidth=1.5; cx.stroke();
+  cx.font='bold 16px Arial'; cx.textAlign='center'; cx.fillStyle=G.showHelp?'#000':'#FFD700';
+  cx.fillText('?',hbX+15,hbY+22);
+  if(G.mouse.clicked&&G.mouse.x>hbX&&G.mouse.x<hbX+30&&G.mouse.y>hbY&&G.mouse.y<hbY+30) G.showHelp=!G.showHelp;
+  if(G.showHelp) drawControlsHelp();
+
+  // Update state machine
+  if(G.state===S.BATTING){
+    if(m.bat.ballIncoming){ m.bat.ballProg+=G.dt/820; if(m.bat.ballProg>=0.62&&!m.bat.canSwing){m.bat.canSwing=true;m.bat.mAngle=Math.random()*Math.PI*2;} }
+    if(m.bat.canSwing) m.bat.mAngle+=(m.bat.mSpeed*G.dt)/1000;
+    if(m.bat.swingTimer>0) m.bat.swingTimer-=G.dt;
+  }
+  if(G.state===S.BOWLING){
+    if(m.bowl.phase==='delivering'){ m.bowl.delivProg+=G.dt/720; if(m.bowl.delivProg>=1&&!m.bowl.aiResult) processBowlDelivery(m); }
+    if(m.bowl.aiTimer>0) m.bowl.aiTimer-=G.dt;
+  }
+  if(G.state===S.FIELDING&&m.fld.active){
+    m.fld.mPos+=m.fld.mDir*m.fld.mSpd;
+    if(m.fld.mPos>=1||m.fld.mPos<=0) m.fld.mDir*=-1;
+    m.fld.mPos=Math.max(0,Math.min(1,m.fld.mPos));
+    m.fld.timer--;
+    m.fld.prog=Math.min(1,1-m.fld.timer/100);
+    if(m.fld.timer<=0||(G.mouse.clicked&&m.fld.active)) resolveFielding(m);
+  }
+}
+
+// ── OVER BREAK SCREEN ────────────────────────────────────────────────────
+function renderOverBreak(){
+  cx.fillStyle='#060612'; cx.fillRect(0,0,BW,BH);
+  drawStars();
+  if(!G.overBreakData) return;
+  const od=G.overBreakData;
+  cx.fillStyle='rgba(0,0,15,0.95)';
+  cx.beginPath(); cx.roundRect(BW/2-250,BH/2-80,500,160,18); cx.fill();
+  cx.strokeStyle='#FFD700'; cx.lineWidth=2.5; cx.stroke();
+  cx.font='bold 18px "Arial Black"'; cx.textAlign='center'; cx.fillStyle='#FFD700';
+  cx.fillText(`OVER ${od.overNum} COMPLETE`,BW/2,BH/2-48);
+  cx.font='14px Arial'; cx.fillStyle='#ccc';
+  cx.fillText(`${od.runs} runs  •  ${od.wkts} wicket${od.wkts!==1?'s':''}  this over`,BW/2,BH/2-22);
+  od.balls.forEach((b,i)=>{
+    const bx=BW/2-130+i*46, by=BH/2-6;
+    let bg='#1a1a2e',tc='#fff';
+    if(b==='W'){bg='#7f1d1d';tc='#fca5a5';}
+    else if(b==='6'){bg='#14532d';tc='#4ade80';}
+    else if(b==='4'){bg='#1e3a5f';tc='#60a5fa';}
+    else if(b==='●'){bg='#1a1a1a';tc='#555';}
+    cx.fillStyle=bg; cx.beginPath(); cx.roundRect(bx,by,40,28,6); cx.fill();
+    cx.font='bold 14px Arial'; cx.fillStyle=tc; cx.textAlign='center'; cx.fillText(b,bx+20,by+19);
+  });
+  cx.font='italic 13px Arial'; cx.fillStyle='rgba(255,215,0,0.5)';
+  cx.fillText('Next over starting...',BW/2,BH/2+70);
+}
+
+// ── INNINGS BREAK ────────────────────────────────────────────────────────
+function renderInnBreak(){
+  cx.fillStyle='#060612'; cx.fillRect(0,0,BW,BH);
+  drawStars();
+  const m=G.match, i0=m.innings[0];
+  if(G.logoLoaded&&G.logoImg){const lw=200,lh=lw*(G.logoImg.naturalHeight/G.logoImg.naturalWidth)||lw*0.45;cx.save();cx.shadowColor='#FFD700';cx.shadowBlur=15;cx.drawImage(G.logoImg,BW/2-lw/2,50,lw,lh);cx.restore();}
+  cx.font='bold 30px "Arial Black"'; cx.textAlign='center'; cx.fillStyle='#FFD700'; cx.shadowColor='#FFD700'; cx.shadowBlur=15;
+  cx.fillText('INNINGS BREAK',BW/2,BH*0.4); cx.shadowBlur=0;
+  cx.font='bold 22px Arial'; cx.fillStyle='#fff';
+  cx.fillText(`1st Innings: ${i0.runs}/${i0.wkts}`,BW/2,BH*0.48);
+  cx.fillText(`Overs: ${i0.ovrs}.${i0.balls}`,BW/2,BH*0.54);
+  cx.font='bold 28px Arial'; cx.fillStyle='#FFD700'; cx.shadowColor='#FFD700'; cx.shadowBlur=10;
+  cx.fillText(`TARGET: ${m.target} RUNS`,BW/2,BH*0.63); cx.shadowBlur=0;
+  cx.font='16px Arial'; cx.fillStyle='#aaa';
+  const chaser=m.playerBatFirst?m.oppName:m.playerName;
+  cx.fillText(`${chaser} needs ${m.target} to win`,BW/2,BH*0.70);
+  drawCoachWasay(BW-230,BH*0.55,220,185);
+  if(Coach.timer<=0) Coach.say('pressure_chase');
+  G.btns=[mkBtn('START 2ND INNINGS ▶',BW/2-140,BH*0.82,280,52,()=>{
+    m.curInn=1; beginNextDelivery(); Vox.play(`Second innings! Target ${m.target} runs!`,'hype'); Aud.transition();
+  },'#FFD700','#000')];
+  G.btns.forEach(drawBtn); checkBtns();
+}
+
+// ── RESULT SCREEN ────────────────────────────────────────────────────────
+function renderResult(){
+  const rd=G.resultData; if(!rd) return;
+  const won=rd.result.winner==='player';
+  const m=rd.match;
+  cx.fillStyle='#000'; cx.fillRect(0,0,BW,BH);
+  const bg=cx.createRadialGradient(BW/2,BH/2,0,BW/2,BH/2,700);
+  bg.addColorStop(0,won?'rgba(34,197,94,0.12)':'rgba(220,38,38,0.12)'); bg.addColorStop(1,'#000');
+  cx.fillStyle=bg; cx.fillRect(0,0,BW,BH);
+  drawStars(); Ptcl.render();
+  if(G.logoLoaded&&G.logoImg){const lw=220,lh=lw*(G.logoImg.naturalHeight/G.logoImg.naturalWidth)||lw*0.45;cx.save();cx.shadowColor='#FFD700';cx.shadowBlur=won?25:8;cx.globalAlpha=0.9;cx.drawImage(G.logoImg,BW/2-lw/2,32,lw,lh);cx.restore();}
+  cx.font='bold 60px "Arial Black"'; cx.textAlign='center';
+  cx.fillStyle=won?'#22c55e':'#ff4444'; cx.shadowColor=cx.fillStyle; cx.shadowBlur=35;
+  cx.fillText(rd.result.type==='tie'?'BARABAR! 🤝':won?'JEET GAYE! 🏆':'HAAR GAYE 😔',BW/2,BH*0.36); cx.shadowBlur=0;
+  // Scorecard
+  const sc_X=BW/2-280,sc_Y=BH*0.42,sc_W=560,sc_H=70;
+  cx.fillStyle='rgba(0,0,0,0.8)'; cx.beginPath(); cx.roundRect(sc_X,sc_Y,sc_W,sc_H,12); cx.fill();
+  cx.strokeStyle='rgba(255,215,0,0.4)'; cx.lineWidth=1.5; cx.stroke();
+  const [i0,i1]=m.innings;
+  cx.font='12px Arial'; cx.fillStyle='#aaa'; cx.textAlign='center';
+  cx.fillText('1st Innings',BW/2-110,sc_Y+20); cx.fillText('2nd Innings',BW/2+110,sc_Y+20);
+  cx.font='bold 22px Arial'; cx.fillStyle='#fff';
+  cx.fillText(`${i0.runs}/${i0.wkts}`,BW/2-110,sc_Y+52);
+  cx.fillText(`${i1.runs}/${i1.wkts}`,BW/2+110,sc_Y+52);
+  cx.strokeStyle='rgba(255,215,0,0.3)'; cx.lineWidth=1;
+  cx.beginPath(); cx.moveTo(BW/2,sc_Y+8); cx.lineTo(BW/2,sc_Y+62); cx.stroke();
+  cx.font='bold 12px Arial'; cx.fillStyle='#FFD700'; cx.fillText('VS',BW/2,sc_Y+40);
+  cx.font='16px Arial'; cx.fillStyle='#aaa';
+  const margTxt=rd.result.type==='tie'?'Match tied!':won?`Won by ${rd.result.margin} ${rd.result.type}`:`Lost by ${rd.result.margin} ${rd.result.type}`;
+  cx.fillText(margTxt,BW/2,BH*0.60);
+  // XP
+  cx.font='bold 18px Arial'; cx.fillStyle='#FFD700'; cx.fillText(`+${rd.xpGain} XP  |  Level ${G.level}`,BW/2,BH*0.66);
+  const bx_=BW/2-180,by_=BH*0.69,bw2=360,bh2=10;
+  cx.fillStyle='#111'; cx.beginPath(); cx.roundRect(bx_,by_,bw2,bh2,5); cx.fill();
+  const xg2=cx.createLinearGradient(bx_,by_,bx_+bw2,by_);
+  xg2.addColorStop(0,'#FFD700'); xg2.addColorStop(1,'#ff9500');
+  cx.fillStyle=xg2; cx.beginPath(); cx.roundRect(bx_,by_,bw2*Math.min(1,G.xp/(G.level*200)),bh2,5); cx.fill();
+  cx.font='10px Arial'; cx.fillStyle='#888'; cx.fillText(`${G.xp}/${G.level*200} XP`,BW/2,by_+22);
+  // Buttons
+  const nxt=nextOpp();
+  G.btns=[];
+  if(nxt){
+    G.btns.push(mkBtn('NEXT MATCH ▶',BW/2-150,BH*0.76,300,52,()=>{setupMatchIntro();G.state=S.INTRO;Aud.transition();},'#22c55e','#fff'));
+  } else {
+    if(G.tournament&&G.tournament.wins>G.tournament.losses){
+      G.vehairiUnlocked=true;
+      G.btns.push(mkBtn('TOURNAMENT COMPLETE! 🏆',BW/2-175,BH*0.76,350,52,()=>{G.state=S.WASAY_REVEAL;G.wasayTimer=0;G.wasayPhase=0;G._wsSpoken=false;G._wpFoot=false;Aud.reveal();},'#FFD700','#000'));
+    } else {
+      G.btns.push(mkBtn('MAIN MENU',BW/2-100,BH*0.76,200,52,()=>{G.state=S.HOME;Aud.transition();},'#333333','#cccccc'));
+    }
+  }
+  G.btns.push(mkBtn('MAIN MENU',BW/2-90,BH*0.88,180,40,()=>{G.state=S.HOME;Aud.transition();},'#1a1a2e','#888888'));
+  G.btns.forEach(drawBtn); checkBtns();
+}
+
+// ── WASAY REVEAL ─────────────────────────────────────────────────────────
+function renderWasayReveal(){
+  G.wasayTimer+=G.dt;
+  const t=G.wasayTimer;
+  cx.fillStyle='#000'; cx.fillRect(0,0,BW,BH);
+
+  if(t<2200){
+    if(t>600){ cx.font='italic 22px Arial'; cx.textAlign='center'; cx.fillStyle=`rgba(150,150,150,${(t-600)/1600*0.7})`; cx.fillText('...','BW/2... BW/2... BW/2... BW/2',BH/2); }
+    cx.font='italic 22px Arial'; cx.textAlign='center'; cx.fillStyle=`rgba(150,150,150,${Math.min(1,(t-600)/1600)*0.7})`; cx.fillText('...',BW/2,BH/2);
+  } else if(t<4500){
+    const p=(t-2200)/2300;
+    cx.fillStyle='#0a0a0a'; cx.fillRect(0,0,BW,BH);
+    cx.fillStyle='#1a1a1a'; cx.fillRect(BW*0.2,BH*0.55,BW*0.6,BH*0.12); // bench
+    cx.fillStyle='#111'; cx.fillRect(BW*0.2,BH*0.52,BW*0.6,BH*0.03);
+    cx.font='italic 18px Arial'; cx.fillStyle=`rgba(150,150,150,${Math.min(1,p)})`; cx.textAlign='center';
+    cx.fillText('An empty dugout...',BW/2,BH*0.4);
+    if(p>0.3&&!G._wpFoot){ G._wpFoot=true; [0,300,620,940].forEach(d=>setTimeout(()=>Aud.click(),d)); }
+    if(p>0.5){cx.font='italic 16px Arial';cx.fillStyle=`rgba(150,150,150,${(p-0.5)*2})`;cx.fillText('...footsteps approach...',BW/2,BH*0.46);}
+    if(p>0.75){
+      const fig_x=lerp(BW*0.2,BW/2,(p-0.75)/0.25); cx.save(); cx.globalAlpha=(p-0.75)*4*0.5;
+      cx.fillStyle='#1a1a2e'; cx.beginPath(); cx.arc(fig_x,BH*0.48,44,0,Math.PI*2); cx.fill();
+      cx.beginPath(); cx.roundRect(fig_x-32,BH*0.52,64,88,4); cx.fill(); cx.restore();
+    }
+  } else if(t<8000){
+    const p=(t-4500)/3500;
+    cx.fillStyle='#000'; cx.fillRect(0,0,BW,BH);
+    const bgR=cx.createRadialGradient(BW/2,BH/2,0,BW/2,BH/2,500);
+    bgR.addColorStop(0,`rgba(255,215,0,${p*0.12})`); bgR.addColorStop(1,'#000');
+    cx.fillStyle=bgR; cx.fillRect(0,0,BW,BH);
+    if(p>0.1&&Math.random()<0.4) Ptcl.spawnGold(BW/2+(Math.random()-0.5)*200,BH/2+(Math.random()-0.5)*100,2);
+    Ptcl.render();
+    cx.font='14px Arial'; cx.textAlign='center'; cx.fillStyle=`rgba(200,200,200,${Math.min(1,p*3)})`;
+    cx.fillText('"BADSHAH... woh BADSHAH hai..."',BW/2,BH*0.32);
+    if(p>0.4){
+      const fig_x=BW/2; cx.save(); cx.globalAlpha=Math.min(1,(p-0.4)/0.35);
+      if(G.wasayImgLoaded&&G.wasayImg){
+        const iw=240,ih=iw*(G.wasayImg.naturalHeight/G.wasayImg.naturalWidth)||iw*1.4;
+        cx.shadowColor='#FFD700'; cx.shadowBlur=40;
+        cx.drawImage(G.wasayImg,fig_x-iw/2,BH*0.35,iw,ih);
+      } else {
+        cx.fillStyle='#1a1a2e'; cx.beginPath(); cx.arc(fig_x,BH*0.5,55,0,Math.PI*2); cx.fill();
+        cx.beginPath(); cx.roundRect(fig_x-40,BH*0.56,80,100,6); cx.fill();
+      }
+      cx.restore();
+    }
+    if(p>0.85){
+      cx.font='bold 48px "Arial Black"'; cx.textAlign='center';
+      cx.fillStyle=`rgba(255,215,0,${(p-0.85)*6.7})`; cx.shadowColor='#FFD700'; cx.shadowBlur=40;
+      cx.fillText('SHAIKH WASAY',BW/2,BH*0.78); cx.shadowBlur=0;
+      cx.font='bold 22px Arial'; cx.fillStyle=`rgba(200,164,0,${(p-0.85)*6.7})`;
+      cx.fillText('THE REAL BADSHAH',BW/2,BH*0.86);
+    }
+  } else {
+    // Full reveal
+    cx.fillStyle='#000'; cx.fillRect(0,0,BW,BH);
+    drawStars();
+    const bgR=cx.createRadialGradient(BW/2,BH/2,0,BW/2,BH/2,600);
+    bgR.addColorStop(0,'rgba(255,215,0,0.1)'); bgR.addColorStop(1,'#000');
+    cx.fillStyle=bgR; cx.fillRect(0,0,BW,BH);
+    if(Math.random()<0.35) Ptcl.spawnGold(BW/2+(Math.random()-0.5)*300,BH/2+(Math.random()-0.5)*200,2);
+    Ptcl.render();
+
+    // Logo top
+    if(G.logoLoaded&&G.logoImg){const lw=220,lh=lw*(G.logoImg.naturalHeight/G.logoImg.naturalWidth)||lw*0.45;cx.save();cx.shadowColor='#FFD700';cx.shadowBlur=25+15*Math.sin(G.t*0.003);cx.drawImage(G.logoImg,BW/2-lw/2,20,lw,lh);cx.restore();}
+
+    // Wasay image
+    if(G.wasayImgLoaded&&G.wasayImg){
+      const iw=260,ih=iw*(G.wasayImg.naturalHeight/G.wasayImg.naturalWidth)||iw*1.35;
+      cx.save(); cx.shadowColor='#FFD700'; cx.shadowBlur=30;
+      cx.drawImage(G.wasayImg,BW/2-iw/2,BH*0.22,iw,ih); cx.restore();
+      // Crown overlay
+      cx.font='52px serif'; cx.textAlign='center'; cx.fillText('👑',BW/2,BH*0.22);
+    } else {
+      drawCoachFigure(BW/2,BH*0.48,70);
+    }
+
+    cx.font='bold 50px "Arial Black"'; cx.textAlign='center'; cx.fillStyle='#FFD700'; cx.shadowColor='#FFD700'; cx.shadowBlur=30;
+    cx.fillText('SHAIKH WASAY',BW/2,BH*0.77); cx.shadowBlur=0;
+    cx.font='bold 24px Arial'; cx.fillStyle='#C8A400'; cx.fillText('THE REAL BADSHAH',BW/2,BH*0.83);
+
+    if(!G._wsSpoken){ G._wsSpoken=true; setTimeout(()=>Vox.play("Theek hai... ab tum tayyar ho.",'dramatic'),600); }
+
+    cx.font='italic 20px "Segoe UI"'; cx.fillStyle='rgba(255,215,0,0.85)';
+    cx.fillText('"Theek hai... ab tum tayyar ho."',BW/2,BH*0.90);
+
+    G.btns=[mkBtn('UNLOCK VEHARI CHAMPIONSHIP 🏆',BW/2-200,BH*0.94,400,46,()=>{G.vehairiUnlocked=true;G.wasayRevealed=true;G.state=S.HOME;Aud.transition();},'#FFD700','#000')];
+    G.btns.forEach(drawBtn); checkBtns();
+  }
+}
+
+// ── VEHARI MODE SCREEN ────────────────────────────────────────────────────
+function renderVehari(){
+  cx.fillStyle='#0a0010'; cx.fillRect(0,0,BW,BH);
+  drawStars();
+  if(G.logoLoaded&&G.logoImg){const lw=240,lh=lw*(G.logoImg.naturalHeight/G.logoImg.naturalWidth)||lw*0.45;cx.save();cx.shadowColor='#FFD700';cx.shadowBlur=18;cx.drawImage(G.logoImg,BW/2-lw/2,28,lw,lh);cx.restore();}
+  cx.font='bold 30px "Arial Black"'; cx.textAlign='center'; cx.fillStyle='#FFD700'; cx.shadowColor='#FFD700'; cx.shadowBlur=15;
+  cx.fillText('VEHARI CITY CHAMPIONSHIP',BW/2,BH*0.3); cx.shadowBlur=0;
+  cx.font='14px Arial'; cx.fillStyle='#888'; cx.fillText('Face the best teams of Vehari! 10-over format.',BW/2,BH*0.35);
+
+  const teams=VEHARI_OPPS;
+  const cols=4, cW=260, cH=80, gap=14;
+  const totW=cols*(cW+gap)-gap, sX=(BW-totW)/2, sY=BH*0.39;
+  teams.forEach((t,i)=>{
+    const col=i%cols, row=Math.floor(i/cols);
+    const tx=sX+col*(cW+gap), ty=sY+row*(cH+gap);
+    cx.fillStyle=t.isFinal?'rgba(255,215,0,0.12)':'rgba(15,15,35,0.9)';
+    cx.beginPath(); cx.roundRect(tx,ty,cW,cH,8); cx.fill();
+    cx.strokeStyle=t.isFinal?'#FFD700':'rgba(255,255,255,0.12)'; cx.lineWidth=t.isFinal?2:1; cx.stroke();
+    cx.fillStyle=t.color; cx.beginPath(); cx.arc(tx+24,ty+cH/2,15,0,Math.PI*2); cx.fill();
+    cx.font=`bold ${t.isFinal?14:13}px Arial`; cx.textAlign='left';
+    cx.fillStyle=t.isFinal?'#FFD700':'#fff'; cx.fillText(t.name,tx+46,ty+28);
+    cx.font='11px Arial'; cx.fillStyle='#888'; cx.fillText(`Skill: ${t.skill}`,tx+46,ty+46);
+    if(t.isFinal){cx.font='bold 10px Arial';cx.fillStyle='#FFD700';cx.fillText('⚜ FINAL BOSS',tx+46,ty+62);}
+  });
+
+  G.btns=[
+    mkBtn('START VEHARI TOURNAMENT ▶',BW/2-175,BH*0.87,350,52,()=>{ initTournament('vehari'); G.state=S.CHAR_SELECT; Aud.transition(); },'#FFD700','#000'),
+    mkBtn('◀ Back',22,20,100,34,()=>{G.state=S.HOME;Aud.click();},'#333333','#cccccc'),
+  ];
+  G.btns.forEach(drawBtn); checkBtns();
+}
+
+// ── EVENT OVERLAY ────────────────────────────────────────────────────────
+function drawEventOverlay(evt){
+  cx.save(); cx.fillStyle='rgba(0,0,0,0.78)'; cx.fillRect(0,0,BW*0.68,BH);
+  cx.fillStyle='rgba(8,8,25,0.97)';
+  cx.beginPath(); cx.roundRect(BW*0.34-270,BH/2-90,540,185,16); cx.fill();
+  cx.strokeStyle='#FFD700'; cx.lineWidth=2.5; cx.stroke();
+  cx.font='60px serif'; cx.textAlign='center'; cx.fillText(evt.icon||'⚠',BW*0.34,BH/2-28);
+  cx.font='bold 22px "Arial Black"'; cx.fillStyle='#FFD700';
+  cx.fillText(evt.title,BW*0.34,BH/2+18);
+  cx.font='14px Arial'; cx.fillStyle='#ccc'; cx.fillText(evt.desc,BW*0.34,BH/2+44);
+  const blinkA=0.5+0.5*Math.sin(G.t*0.012);
+  cx.font='bold 12px Arial'; cx.fillStyle=`rgba(255,215,0,${blinkA})`;
+  cx.fillText('Match paused... resuming shortly',BW*0.34,BH/2+72);
+  cx.restore();
+}
+
+// ── CONTROLS HELP ─────────────────────────────────────────────────────────
+function drawControlsHelp(){
+  const x=BW/2-220,y=BH/2-160,w=440,h=325;
+  cx.save();
+  cx.fillStyle='rgba(3,3,18,0.97)'; cx.beginPath(); cx.roundRect(x,y,w,h,16); cx.fill();
+  cx.strokeStyle='#FFD700'; cx.lineWidth=2; cx.stroke();
+  cx.font='bold 17px "Arial Black"'; cx.textAlign='center'; cx.fillStyle='#FFD700';
+  cx.fillText('CONTROLS',x+w/2,y+30);
+  cx.strokeStyle='rgba(255,215,0,0.35)'; cx.lineWidth=1;
+  cx.beginPath(); cx.moveTo(x+20,y+42); cx.lineTo(x+w-20,y+42); cx.stroke();
+  const items=[
+    ['BATTING','#22c55e',true],['SPACE','Swing bat (time the gold zone!)'],['Q / E','Change shot direction (6 types)'],
+    ['BOWLING','#3b82f6',true],['1–6 Keys','Select delivery type (Yorker/Bouncer/etc)'],['Mouse','Aim delivery on pitch'],['Click/ENTER','Bowl!'],
+    ['FIELDING','#f97316',true],['Click','Time the catch / run-out meter in green zone'],
+    ['GENERAL','#a855f7',true],['?','Toggle this help panel'],['SPACE','Also confirms toss / advances screens'],
+  ];
+  let oy=y+58;
+  items.forEach(([k,v,isH])=>{
+    if(isH){cx.font='bold 11px Arial';cx.fillStyle=v;cx.textAlign='left';cx.fillText(`── ${k} ──`,x+24,oy);oy+=18;return;}
+    cx.font='bold 12px Arial';cx.textAlign='left';cx.fillStyle='#FFD700';cx.fillText(k,x+30,oy);
+    cx.font='12px Arial';cx.fillStyle='#bbb';cx.fillText(v,x+148,oy);oy+=19;
+  });
+  cx.font='italic 10px Arial'; cx.fillStyle='rgba(255,215,0,0.4)'; cx.textAlign='center';
+  cx.fillText('Click ? to close',x+w/2,y+h-12);
+  cx.restore();
+}
+
+// ── UTILITY ──────────────────────────────────────────────────────────────
+function lerp(a,b,t){return a+(b-a)*t;}
+
+// ── INPUT ────────────────────────────────────────────────────────────────
+function cvPos(e){
+  const r=gc.getBoundingClientRect();
+  const cx2=(e.clientX||(e.touches?.[0]?.clientX||0))-r.left;
+  const cy2=(e.clientY||(e.touches?.[0]?.clientY||0))-r.top;
+  return{x:cx2*(BW/r.width), y:cy2*(BH/r.height)};
+}
+gc.addEventListener('mousemove',e=>{const p=cvPos(e);G.mouse.x=p.x;G.mouse.y=p.y;});
+gc.addEventListener('mousedown',e=>{const p=cvPos(e);G.mouse.x=p.x;G.mouse.y=p.y;G.mouse.down=true;Aud.init();Aud.resume();});
+gc.addEventListener('mouseup',e=>{
+  const p=cvPos(e);G.mouse.x=p.x;G.mouse.y=p.y;G.mouse.down=false;G.mouse.clicked=true;
+  if(G.match?.fld.active&&(G.state===S.FIELDING)){resolveFielding(G.match);G.mouse.clicked=false;}
+});
+gc.addEventListener('touchstart',e=>{e.preventDefault();const p=cvPos(e);G.mouse.x=p.x;G.mouse.y=p.y;G.mouse.down=true;Aud.init();Aud.resume();});
+gc.addEventListener('touchend',e=>{e.preventDefault();G.mouse.down=false;G.mouse.clicked=true;});
+document.addEventListener('keydown',e=>{
+  G.keys[e.code]=true;Aud.init();Aud.resume();
+  const m=G.match;
+  if(e.code==='Space'){
+    e.preventDefault();
+    if(m&&G.state===S.BATTING&&m.bat.canSwing&&!m.bat.swingResult){
+      const raw=calcTiming(m.bat);
+      const timing=badshahFactor(raw);
+      G.timingFlash={text:timing==='PERFECT'?'PERFECT! 🔥':timing==='GOOD'?'GOOD TIMING!':timing==='OKAY'?'OKAY':'MISS!',
+        color:timing==='PERFECT'?'#FFD700':timing==='GOOD'?'#22c55e':timing==='OKAY'?'#f97316':'#ff4444',timer:55};
+      Aud.bat(timing==='PERFECT'?0.9:timing==='GOOD'?0.65:timing==='OKAY'?0.4:0.1);
+      processBatHit(playerBat(timing,G.selectedChar), timing);
+    }
+  }
+  if(e.code==='KeyQ'&&m&&G.state===S.BATTING) m.bat.shotDir=(m.bat.shotDir-1+6)%6;
+  if(e.code==='KeyE'&&m&&G.state===S.BATTING) m.bat.shotDir=(m.bat.shotDir+1)%6;
+  if(m&&G.state===S.BOWLING&&m.bowl.phase==='select'){
+    const n=parseInt(e.key);
+    if(n>=1&&n<=6){m.bowl.selType=n-1;m.bowl.phase='aim';Aud.click();}
+  }
+  if(e.code==='Enter'&&m&&G.state===S.BOWLING&&m.bowl.phase==='aim'){
+    m.bowl.phase='delivering';m.bowl.delivProg=0;m.bowl.aiResult=null;Aud.bat(0.3);
+  }
+});
+document.addEventListener('keyup',e=>{delete G.keys[e.code];});
+
+// ── MAIN LOOP ────────────────────────────────────────────────────────────
+let lastT=0;
+function loop(ts){
+  G.dt=Math.min(ts-lastT,50); lastT=ts; G.t=ts;
+  updateStars();
+  Ptcl.update(G.dt);
+  if(Coach.timer>0) Coach.timer-=G.dt;
+  G.logoAlpha=Math.min(1,G.logoAlpha+G.dt*0.0008);
+
+  cx.clearRect(0,0,BW,BH);
+  switch(G.state){
+    case S.HOME:      renderHome();         break;
+    case S.CHAR_SELECT: renderCharSelect(); break;
+    case S.PERMISSION:  renderPermission(); break;
+    case S.INTRO:       renderIntro();      break;
+    case S.TOSS:        renderToss();       break;
+    case S.BATTING: case S.BOWLING: case S.FIELDING: renderMatch(); break;
+    case S.OVER_BREAK:  renderOverBreak();  break;
+    case S.INN_BREAK:   renderInnBreak();   break;
+    case S.RESULT:      renderResult();     break;
+    case S.WASAY_REVEAL: renderWasayReveal(); break;
+    case S.VEHARI:      renderVehari();     break;
+  }
+  G.mouse.clicked=false; // clear AFTER render
+  requestAnimationFrame(loop);
+}
+
+// ── INIT ─────────────────────────────────────────────────────────────────
+initStars();
+if(window.speechSynthesis){speechSynthesis.getVoices();speechSynthesis.addEventListener('voiceschanged',()=>speechSynthesis.getVoices());}
+setTimeout(()=>Vox.play("Gully Badshah mein aapka swagat hai! Mohalle ki kahani shuru hone wali hai.",'hype'),1500);
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
