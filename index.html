@@ -98,6 +98,13 @@ let G = {
   runResultColor: '#FFD700',
   wasayRevealTimer: 0,
   wasayRevealPhase: 0,
+  timingFlashText: '',
+  timingFlashColor: '#FFD700',
+  timingFlashTimer: 0,
+  badshahFactorMsg: '',
+  badshahFactorTimer: 0,
+  overSummaryData: null,
+  showControls: false,
 };
 
 // ─── AUDIO SYSTEM ───────────────────────────────────────────────
@@ -1578,6 +1585,63 @@ function drawFieldingUI(m) {
   cx.fillText('CLICK NOW!', barX+barW/2, barY+barH+20);
 }
 
+// ─── CONTROLS HELP OVERLAY ───────────────────────────────────────
+function drawControlsHelp() {
+  const x = BASE_W/2-220, y = BASE_H/2-160, w = 440, h = 320;
+  cx.save();
+  cx.fillStyle = 'rgba(5,5,20,0.97)';
+  cx.beginPath(); cx.roundRect(x, y, w, h, 16); cx.fill();
+  cx.strokeStyle = '#FFD700'; cx.lineWidth = 2; cx.stroke();
+
+  cx.font = 'bold 18px "Arial Black"';
+  cx.textAlign = 'center';
+  cx.fillStyle = '#FFD700';
+  cx.fillText('CONTROLS', x+w/2, y+30);
+  cx.strokeStyle = 'rgba(255,215,0,0.4)'; cx.lineWidth = 1;
+  cx.beginPath(); cx.moveTo(x+20,y+40); cx.lineTo(x+w-20,y+40); cx.stroke();
+
+  const items = [
+    ['BATTING', '#22c55e'],
+    ['SPACE', 'Swing the bat (timing!)'],
+    ['Q / E', 'Change shot direction (6 types)'],
+    ['BOWLING', '#3b82f6'],
+    ['1 – 6', 'Select delivery type'],
+    ['Mouse', 'Aim delivery on the pitch'],
+    ['Click / ENTER', 'Bowl the ball'],
+    ['FIELDING', '#f97316'],
+    ['Click', 'Time the catch / run-out meter'],
+    ['GENERAL', '#a855f7'],
+    ['?', 'Toggle this help panel'],
+  ];
+
+  let oy = y + 56;
+  items.forEach(([key, val]) => {
+    const isHeader = ['BATTING','BOWLING','FIELDING','GENERAL'].includes(key);
+    if (isHeader) {
+      cx.font = 'bold 12px Arial';
+      cx.fillStyle = val;
+      cx.textAlign = 'left';
+      cx.fillText(`── ${key} ──`, x+24, oy);
+      oy += 18;
+      return;
+    }
+    cx.font = 'bold 13px Arial';
+    cx.textAlign = 'left';
+    cx.fillStyle = '#FFD700';
+    cx.fillText(key, x+30, oy);
+    cx.font = '13px Arial';
+    cx.fillStyle = '#ccc';
+    cx.fillText(val, x+160, oy);
+    oy += 20;
+  });
+
+  cx.font = 'italic 11px Arial';
+  cx.fillStyle = 'rgba(255,215,0,0.5)';
+  cx.textAlign = 'center';
+  cx.fillText('Click ? to close', x+w/2, y+h-14);
+  cx.restore();
+}
+
 // ─── STATE: HOME ─────────────────────────────────────────────────
 function renderHome() {
   // Background gradient
@@ -2298,7 +2362,6 @@ function processBatResult(m, runs) {
 }
 
 function processBowlResult(m, deliveryType, accuracy) {
-  // Simulate AI batsman reaction
   const aiResult = aiBatResult(m, deliveryType);
   m.bowl.aiDecision = aiResult;
   m.bowl.aiTimer = 900;
@@ -2307,15 +2370,23 @@ function processBowlResult(m, deliveryType, accuracy) {
   const inn = currentInn(m);
   nextBall(m);
 
+  let shouldFielding = false;
+  let fieldingType = 'runout';
+
   if (aiResult === 'W') {
     addWicket(m);
     Audio.wicket(); Audio.crowd(0.9);
     Voice.play(commentaryPool('wicket'), 'dramatic');
     Particles.spawn(BASE_W*0.38, BASE_H/2+50,'#ff4444',25,60,4);
-    CoachWasay.getLine('six'); // coach celebrates
+    CoachWasay.getLine('six');
     G.runResultText='WICKET! ✅'; G.runResultColor='#22c55e'; G.runResultTimer=150;
   } else {
     const runs = parseInt(aiResult) || 0;
+    // Trigger fielding event on 1-3 run hits (35% chance)
+    if (runs >= 1 && runs <= 3 && Math.random() < 0.35) {
+      shouldFielding = true;
+      fieldingType = runs === 1 ? 'runout' : Math.random() < 0.5 ? 'catch' : 'runout';
+    }
     addRuns(m, runs);
     if (runs === 6) { Audio.six(); Particles.spawn(BASE_W*0.38, BASE_H/2+50,'#ff4444',25,60,4); Voice.play(commentaryPool('six'),'dramatic'); CoachWasay.getLine('wicket'); G.runResultText='SIX! 😱'; G.runResultColor='#ff4444'; G.runResultTimer=150; }
     else if (runs === 4) { Audio.four(); Voice.play(commentaryPool('four'),'dramatic'); G.runResultText='FOUR! 😬'; G.runResultColor='#ff6b35'; G.runResultTimer=130; }
@@ -2326,16 +2397,78 @@ function processBowlResult(m, deliveryType, accuracy) {
   const endResult = checkInningsEnd(m);
   if (endResult === 'innings_break') { G.state = STATES.INNINGS_BREAK; return; }
   else if (endResult === 'match_over') { endMatch(); return; }
-
   if (m.currentInnings===1 && m.target && currentInn(m).runs >= m.target) { endMatch(); return; }
 
+  // Check if over just completed → show over summary briefly
+  const overJustCompleted = inn.balls === 0 && inn.overs > 0;
+
   setTimeout(() => {
-    if (G.state===STATES.FIRST_INNINGS||G.state===STATES.SECOND_INNINGS) {
-      m.bowl.phase = 'select';
-      m.bowl.aiDecision = null;
+    if (G.state!==STATES.FIRST_INNINGS && G.state!==STATES.SECOND_INNINGS) return;
+    m.bowl.phase = 'select';
+    m.bowl.aiDecision = null;
+
+    if (shouldFielding && !m.field.active) {
+      // Activate fielding mini-game
+      m.field.active = true;
+      m.field.type = fieldingType;
+      m.field.meterPos = 0.2 + Math.random() * 0.3;
+      m.field.meterDir = Math.random() < 0.5 ? 1 : -1;
+      m.field.meterSpeed = 0.013 + Math.random() * 0.007;
+      m.field.timer = 85 + Math.floor(Math.random() * 35);
+      m.field.ballX = BASE_W * 0.55; m.field.ballY = BASE_H * 0.3;
+      m.field.ballTargetX = BASE_W * 0.38; m.field.ballTargetY = BASE_H * 0.68;
+      m.field.progress = 0;
+      m.field.result = null;
+      Voice.play(fieldingType === 'catch' ? 'Catch milega! Click in the green zone!' : 'Run out ka mauka! Click when in the green zone!', 'hype');
+    } else if (overJustCompleted) {
+      showOverSummary(m);
+    } else {
       startNextDelivery(m);
     }
   }, 1400);
+}
+
+// ─── OVER SUMMARY ────────────────────────────────────────────────
+function showOverSummary(m) {
+  const inn = currentInn(m);
+  const overNum = inn.overs;
+  // Collect last 6 balls from history
+  const last6 = inn.history.slice(-6);
+  const overRuns = last6.reduce((s,b) => s + (b==='W'||b==='●'?0:parseInt(b)||0), 0);
+  const overWkts = last6.filter(b=>b==='W').length;
+
+  G.overSummaryData = { overNum, overRuns, overWkts, balls: last6, timer: 2500 };
+  Voice.play(`Over ${overNum} complete — ${overRuns} runs, ${overWkts} wicket${overWkts!==1?'s':''}!`, 'calm');
+  if (overRuns >= 15) CoachWasay.getLine('six');
+  else if (overWkts >= 2) CoachWasay.getLine('collapse');
+
+  setTimeout(() => {
+    if (G.state === STATES.FIRST_INNINGS || G.state === STATES.SECOND_INNINGS) {
+      G.overSummaryData = null;
+      startNextDelivery(m);
+    }
+  }, 2600);
+}
+
+// ─── WASAY BADSHAH FACTOR ────────────────────────────────────────
+function checkBadshahFactor(m, baseTiming) {
+  const char = G.selectedChar;
+  if (!char) return baseTiming;
+  // Random miracle improvement (5% chance based on level)
+  const miracleChance = 0.03 + G.level * 0.005;
+  if (Math.random() < miracleChance) {
+    G.badshahFactorMsg = '⚜ BADSHAH FACTOR! ⚜';
+    G.badshahFactorTimer = 120;
+    Particles.spawnGold(BASE_W*0.38, BASE_H/2-30, 40);
+    Audio.cheer();
+    Voice.play("BADSHAH FACTOR! Impossible shot!", 'hype');
+    return 'PERFECT'; // upgrade timing to perfect
+  }
+  // Character special boost
+  if (char.special === 'Perfect Timing' && baseTiming === 'GOOD') return 'PERFECT';
+  if (char.special === 'Power Surge' && baseTiming === 'PERFECT') return 'PERFECT'; // extra power
+  if (char.special === 'Aggressive Mode' && baseTiming === 'OKAY') return 'GOOD';
+  return baseTiming;
 }
 
 function endMatch() {
@@ -2392,6 +2525,40 @@ function renderMatch(state) {
   // Coach Wasay (right bottom corner)
   CoachWasay.render(BASE_W*0.695, BASE_H-190, BASE_W*0.295, 182);
 
+  // Tournament progress pill (top-left)
+  if (G.tournamentData) {
+    const td = G.tournamentData;
+    const total = td.schedule.length;
+    const played = td.schedule.filter(s=>s.played).length;
+    const cx_ = 12, cy_ = 10;
+    cx.fillStyle = 'rgba(0,0,0,0.7)';
+    cx.beginPath(); cx.roundRect(cx_, cy_, 170, 26, 13); cx.fill();
+    cx.strokeStyle = '#FFD700'; cx.lineWidth = 1; cx.stroke();
+    cx.font = '11px Arial'; cx.textAlign = 'left'; cx.fillStyle = '#FFD700';
+    const modeLabel = G.matchMode === 'vehari' ? 'Vehari' : 'Mohalla';
+    cx.fillText(`${modeLabel} • Match ${played+1}/${total}  W:${td.playerWins} L:${td.playerLosses}`, cx_+10, cy_+17);
+  }
+
+  // Target chase status bar (2nd innings batting)
+  if (m.currentInnings === 1 && m.target && isPlayerBatting(m)) {
+    const inn = currentInn(m);
+    const needed = m.target - inn.runs;
+    const ballsLeft = m.totalOvers * 6 - (inn.overs * 6 + inn.balls);
+    const urgent = needed > 0 && ballsLeft > 0 && (needed / ballsLeft) > 2;
+    const barFull = 320, barH = 20;
+    const barX = BASE_W * 0.38 - barFull/2, barY = BASE_H - 28;
+    cx.fillStyle = 'rgba(0,0,0,0.75)';
+    cx.beginPath(); cx.roundRect(barX - 4, barY - 4, barFull + 8, barH + 8, 10); cx.fill();
+    cx.fillStyle = '#222';
+    cx.beginPath(); cx.roundRect(barX, barY, barFull, barH, barH/2); cx.fill();
+    const pct = Math.max(0, Math.min(1, inn.runs / m.target));
+    const fillColor = pct >= 1 ? '#22c55e' : urgent ? '#ef4444' : '#3b82f6';
+    cx.fillStyle = fillColor;
+    cx.beginPath(); cx.roundRect(barX, barY, barFull * pct, barH, barH/2); cx.fill();
+    cx.font = 'bold 11px Arial'; cx.textAlign = 'center'; cx.fillStyle = '#fff';
+    cx.fillText(needed > 0 ? `Need ${needed} from ${ballsLeft} balls` : 'TARGET REACHED!', barX + barFull/2, barY + 14);
+  }
+
   // Commentary bar
   if (m.commentTimer > 0) {
     const alpha = Math.min(1, m.commentTimer/300);
@@ -2422,11 +2589,92 @@ function renderMatch(state) {
     G.runResultTimer--;
   }
 
+  // Timing flash (show quality label)
+  if (G.timingFlashTimer > 0) {
+    cx.save();
+    cx.globalAlpha = Math.min(1, G.timingFlashTimer / 20);
+    cx.font = 'bold 30px "Arial Black",Arial';
+    cx.textAlign = 'center';
+    cx.fillStyle = G.timingFlashColor;
+    cx.shadowColor = G.timingFlashColor; cx.shadowBlur = 18;
+    cx.fillText(G.timingFlashText, BASE_W * 0.38, BASE_H * 0.55);
+    cx.restore();
+    G.timingFlashTimer--;
+  }
+
+  // Badshah Factor flash
+  if (G.badshahFactorTimer > 0) {
+    cx.save();
+    const bfa = Math.min(1, G.badshahFactorTimer / 30);
+    cx.globalAlpha = bfa;
+    cx.fillStyle = 'rgba(0,0,0,0.6)';
+    cx.fillRect(0, 0, BASE_W, BASE_H);
+    cx.font = 'bold 52px "Arial Black"';
+    cx.textAlign = 'center';
+    cx.fillStyle = '#FFD700';
+    cx.shadowColor = '#FFD700'; cx.shadowBlur = 50;
+    cx.fillText(G.badshahFactorMsg, BASE_W / 2, BASE_H / 2 - 10);
+    cx.font = 'bold 20px Arial';
+    cx.fillStyle = '#fff';
+    cx.fillText('Impossible shot incoming!', BASE_W / 2, BASE_H / 2 + 36);
+    cx.restore();
+    G.badshahFactorTimer--;
+  }
+
+  // Over summary overlay
+  if (G.overSummaryData) {
+    const od = G.overSummaryData;
+    cx.save();
+    cx.fillStyle = 'rgba(0,0,10,0.88)';
+    cx.beginPath(); cx.roundRect(BASE_W/2-230, BASE_H/2-70, 460, 140, 14); cx.fill();
+    cx.strokeStyle = '#FFD700'; cx.lineWidth = 2; cx.stroke();
+    cx.font = 'bold 16px Arial';
+    cx.textAlign = 'center';
+    cx.fillStyle = '#FFD700';
+    cx.fillText(`OVER ${od.overNum} COMPLETE`, BASE_W/2, BASE_H/2-40);
+    cx.font = '14px Arial';
+    cx.fillStyle = '#ccc';
+    cx.fillText(`${od.overRuns} runs  •  ${od.overWkts} wicket${od.overWkts!==1?'s':''}  this over`, BASE_W/2, BASE_H/2-10);
+    // Show last 6 ball dots
+    od.balls.forEach((b, i) => {
+      const bx = BASE_W/2 - 120 + i*44, by = BASE_H/2+15;
+      let bg='#222', tc='#fff';
+      if(b==='W'){bg='#c0392b';}
+      else if(b==='6'){bg='#145a32';tc='#2ecc71';}
+      else if(b==='4'){bg='#1a5276';tc='#3498db';}
+      else if(b==='●'){bg='#333';tc='#888';}
+      cx.fillStyle=bg; cx.beginPath(); cx.roundRect(bx,by,36,28,5); cx.fill();
+      cx.font='bold 13px Arial'; cx.fillStyle=tc; cx.textAlign='center';
+      cx.fillText(b, bx+18, by+19);
+    });
+    cx.font='italic 12px Arial';
+    cx.fillStyle='rgba(255,215,0,0.6)';
+    cx.fillText('Next over starting soon...', BASE_W/2, BASE_H/2+62);
+    cx.restore();
+  }
+
   // Random event overlay
   if (G.eventActive && G.eventData) {
     drawEventOverlay(G.eventData);
     G.eventTimer -= G.dt;
     if (G.eventTimer <= 0) { G.eventActive = false; G.eventData = null; }
+  }
+
+  // Controls help overlay
+  if (G.showControls) {
+    drawControlsHelp();
+  }
+
+  // Controls help toggle button (small ?)
+  const chBx = BASE_W * 0.695 - 34, chBy = 8;
+  cx.fillStyle = G.showControls ? '#FFD700' : 'rgba(30,30,60,0.9)';
+  cx.beginPath(); cx.roundRect(chBx, chBy, 28, 28, 8); cx.fill();
+  cx.strokeStyle = '#FFD700'; cx.lineWidth = 1; cx.stroke();
+  cx.font = 'bold 15px Arial'; cx.textAlign = 'center';
+  cx.fillStyle = G.showControls ? '#000' : '#FFD700';
+  cx.fillText('?', chBx + 14, chBy + 20);
+  if (G.mouse.clicked && G.mouse.x > chBx && G.mouse.x < chBx+28 && G.mouse.y > chBy && G.mouse.y < chBy+28) {
+    G.showControls = !G.showControls;
   }
 
   // Update batting mechanics
@@ -2529,27 +2777,42 @@ function drawEventOverlay(evt) {
 }
 
 function resolveFielding(m) {
+  if (!m.field.active) return;
   const pos = m.field.meterPos;
+  const inGold  = pos > 0.42 && pos < 0.58;
   const inGreen = pos > 0.35 && pos < 0.65;
-  const inGold = pos > 0.42 && pos < 0.58;
   m.field.active = false;
-  if (inGold || (inGreen && Math.random()<0.7)) {
-    addWicket(m);
-    Audio.wicket();
-    G.runResultText = m.field.type==='catch' ? 'CAUGHT! 🎯' : 'RUN OUT! 🎯';
+  const success = inGold || (inGreen && Math.random() < 0.75);
+
+  if (success) {
+    // Fielding dismiss counts only if player is bowling (opponent batting)
+    if (!isPlayerBatting(m)) {
+      addWicket(m);
+      Audio.wicket();
+      Particles.spawnGold(BASE_W*0.38, BASE_H/2+50, 20);
+    }
+    G.runResultText = m.field.type === 'catch' ? 'CAUGHT! 🎯' : 'RUN OUT! 🎯';
     G.runResultColor = '#22c55e';
-    G.runResultTimer = 140;
-    Voice.play('Kamaal catch/run-out! Wicket!','hype');
+    G.runResultTimer = 150;
+    Voice.play(m.field.type === 'catch' ? 'Zabardast catch! Out!' : 'Run out! Bahut achi fielding!', 'hype');
     CoachWasay.getLine('six');
   } else {
     Audio.bat(0.3);
     G.runResultText = 'SAFE! 😅';
     G.runResultColor = '#ff6b35';
     G.runResultTimer = 100;
-    Voice.play('Chhoot gaya!','funny');
+    Voice.play('Bachh gaya! Achi daud thi!', 'funny');
   }
+
+  // Check innings end after possible extra wicket
+  const endResult = checkInningsEnd(m);
+  if (endResult === 'innings_break') { G.state = STATES.INNINGS_BREAK; return; }
+  else if (endResult === 'match_over') { endMatch(); return; }
+
   setTimeout(() => {
-    if (G.state===STATES.FIRST_INNINGS||G.state===STATES.SECOND_INNINGS) startNextDelivery(m);
+    if (G.state === STATES.FIRST_INNINGS || G.state === STATES.SECOND_INNINGS) {
+      startNextDelivery(m);
+    }
   }, 1000);
 }
 
@@ -2647,6 +2910,23 @@ function renderResult() {
   const marginText = rd.result.type==='tie'?'Match tied!':
     won ? `Won by ${rd.result.margin} ${rd.result.type}` : `Lost by ${rd.result.margin} ${rd.result.type}`;
   cx.fillText(marginText, BASE_W/2, BASE_H*0.52);
+
+  // Scorecard
+  const scW=520, scX=BASE_W/2-scW/2, scY=BASE_H*0.56;
+  cx.fillStyle='rgba(0,0,0,0.7)';
+  cx.beginPath(); cx.roundRect(scX,scY,scW,58,10); cx.fill();
+  cx.strokeStyle='rgba(255,215,0,0.4)'; cx.lineWidth=1; cx.stroke();
+  const i1c=m.innings[0], i2c=m.innings[1];
+  cx.font='12px Arial'; cx.textAlign='center';
+  cx.fillStyle='#aaa';
+  cx.fillText('1st Innings', BASE_W/2-120, scY+18);
+  cx.fillText('2nd Innings', BASE_W/2+120, scY+18);
+  cx.font='bold 18px Arial'; cx.fillStyle='#fff';
+  cx.fillText(`${i1c.runs}/${i1c.wickets}`, BASE_W/2-120, scY+42);
+  cx.fillText(`${i2c.runs}/${i2c.wickets}`, BASE_W/2+120, scY+42);
+  cx.strokeStyle='rgba(255,215,0,0.3)'; cx.beginPath();
+  cx.moveTo(BASE_W/2,scY+8); cx.lineTo(BASE_W/2,scY+50); cx.stroke();
+  cx.font='bold 12px Arial'; cx.fillStyle='#FFD700'; cx.fillText('VS', BASE_W/2, scY+34);
 
   // XP
   cx.font='bold 20px Arial';
@@ -2999,9 +3279,15 @@ document.addEventListener('keydown', e => {
   if (e.code === 'Space') {
     e.preventDefault();
     if (m && m.phase === 'batting' && m.bat.canSwing && !m.bat.swingResult) {
-      const timing = calcTiming(m.bat);
+      const rawTiming = calcTiming(m.bat);
+      const timing = checkBadshahFactor(m, rawTiming);
+      m.bat.lastTimingLabel = timing;
       const runs = playerBatResult(timing, m.bat.shotDir, G.selectedChar);
       Audio.bat(timing==='PERFECT'?0.9:timing==='GOOD'?0.65:timing==='OKAY'?0.4:0.1);
+      // Flash timing quality text
+      G.timingFlashText = timing==='PERFECT'?'PERFECT! 🔥':timing==='GOOD'?'GOOD TIMING!':timing==='OKAY'?'OKAY':'MISS!';
+      G.timingFlashColor = timing==='PERFECT'?'#FFD700':timing==='GOOD'?'#22c55e':timing==='OKAY'?'#f97316':'#ff4444';
+      G.timingFlashTimer = 55;
       processBatResult(m, runs);
     }
   }
