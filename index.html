@@ -258,6 +258,26 @@
 
 <script>
 (() => {
+  // Polyfill for roundRect (Safari < 15.4, older Chrome)
+  if (!CanvasRenderingContext2D.prototype.roundRect) {
+    CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, radii) {
+      let r = Array.isArray(radii) ? radii[0] : (radii || 0);
+      r = Math.min(r, w / 2, h / 2);
+      this.beginPath();
+      this.moveTo(x + r, y);
+      this.lineTo(x + w - r, y);
+      this.arcTo(x + w, y, x + w, y + r, r);
+      this.lineTo(x + w, y + h - r);
+      this.arcTo(x + w, y + h, x + w - r, y + h, r);
+      this.lineTo(x + r, y + h);
+      this.arcTo(x, y + h, x, y + h - r, r);
+      this.lineTo(x, y + r);
+      this.arcTo(x, y, x + r, y, r);
+      this.closePath();
+      return this;
+    };
+  }
+
   const canvas   = document.getElementById('game-canvas');
   const ctx      = canvas.getContext('2d');
   const COLS     = 20;
@@ -310,6 +330,7 @@
     food         = freeCell();
     best         = parseInt(localStorage.getItem('snakeBest') || '0', 10);
     updateHUD();
+    draw();
     clearInterval(loop);
     loop = setInterval(tick, speedMs());
   }
@@ -428,6 +449,9 @@
       ctx.stroke();
     }
 
+    // Don't draw game elements if not initialized
+    if (!snake || !food) return;
+
     // Food
     drawFood(food, '#3fb950', '#7ee787');
 
@@ -440,7 +464,7 @@
     // Snake body
     for (let i = snake.length - 1; i >= 1; i--) {
       const t     = 1 - i / snake.length;
-      const green = Math.round(80 + t * 105);  // darker tail → brighter head
+      const green = Math.round(80 + t * 105);
       ctx.fillStyle = `rgb(0, ${green}, 40)`;
       const pad = 2;
       ctx.beginPath();
@@ -457,6 +481,7 @@
     ctx.beginPath();
     ctx.roundRect(head.x * CELL + 1, head.y * CELL + 1, CELL - 2, CELL - 2, 5);
     ctx.fill();
+
 
     // Eyes
     const ex = dir.x, ey = dir.y;
