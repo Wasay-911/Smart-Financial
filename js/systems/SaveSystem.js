@@ -18,6 +18,7 @@ export class SaveSystem {
         achievements: state.achievements.toJSON(),
         dailyReward:  state.dailyReward.toJSON(),
         cities:       state.cities.toJSON(),
+        tutorial:     state.tutorial?.toJSON(),
         missionCount: state.missions.missionCount,
         stats: {
           totalEarned:          state.economy.totalEarned,
@@ -60,6 +61,7 @@ export class SaveSystem {
     state.achievements.fromJSON(data.achievements);
     state.dailyReward.fromJSON(data.dailyReward);
     state.cities.fromJSON(data.cities);
+    state.tutorial?.fromJSON(data.tutorial);
     state.missions.missionCount = data.missionCount||0;
     if (data.stats) {
       state.stats.maxSpeedReached    = data.stats.maxSpeedReached||0;

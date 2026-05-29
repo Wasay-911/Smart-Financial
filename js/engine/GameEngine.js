@@ -19,6 +19,7 @@ export class GameEngine {
     this.achievements=null; this.dailyReward=null; this.maintenance=null;
     this.fleet=null; this.cities=null;   // ← NEW: CitySystem
 
+    this.tutorial = null;  // TutorialSystem (injected)
     this.obstacles=[]; this.fuelStations=[];
     this.timeOfDay=0.25; this.dayDuration=300;
 
@@ -55,6 +56,7 @@ export class GameEngine {
       economy:this.economy, fleet:this.fleet, progression:this.progression,
       achievements:this.achievements, dailyReward:this.dailyReward,
       cities:this.cities, missions:this.missions, truck:this.truck, stats:this.stats,
+      tutorial:this.tutorial,
     };
   }
 
@@ -78,16 +80,23 @@ export class GameEngine {
 
     // Spawn truck near origin city (on the road)
     const spawn = this.cities.spawnPosFor(def.fromCity || 'KARACHI');
-    this.truck.x=spawn.x; this.truck.y=spawn.y; this.truck.angle=spawn.angle;
     this.fleet.applyToTruck(this.truck);
     this.truck.resetForMission();
     this.truck.x=spawn.x; this.truck.y=spawn.y; this.truck.angle=spawn.angle;
 
-    this.camera.snapTo(this.truck.x,this.truck.y);
+    this.camera.snapTo(this.truck.x, this.truck.y);
     this.missions.startMission(idx);
-    this.timeOfDay=0.25; this.weather.forceWeather('SUNNY');
-    this.audio?.startEngine();
-    this.setState(GAME_STATE.DRIVING);
+    this.timeOfDay = 0.25;
+    this.weather.forceWeather('SUNNY');
+
+    // Show tutorial on first-ever mission
+    if (this.tutorial && this.tutorial.shouldShow(this.missions.missionCount - 0)) {
+      this.tutorial.start();
+      this.setState(GAME_STATE.TUTORIAL);
+    } else {
+      this.audio?.startEngine();
+      this.setState(GAME_STATE.DRIVING);
+    }
   }
 
   // ── Update ────────────────────────────────────────────────
@@ -266,6 +275,15 @@ export class GameEngine {
         const act=menu.drawGameOver(this._gameOverReason,input.mouse,W,H);
         if(act==='retry'){truck.resetForMission();this._buildWorld();missions.refreshPool(progression.level,cities.getUnlocked());this.setState(GAME_STATE.MISSION_SELECT);}
         if(act==='menu'){audio?.stopEngine();truck.resetForMission();this.setState(GAME_STATE.MAIN_MENU);}
+        break;}
+      case GAME_STATE.TUTORIAL:{
+        this._renderWorld();
+        const act=menu.drawTutorial(this.tutorial,input.mouse,W,H);
+        if(act==='next'){
+          const done=this.tutorial.next();
+          if(done){this.audio?.startEngine();this.setState(GAME_STATE.DRIVING);}
+        }
+        if(act==='skip'){this.tutorial.skip();this.audio?.startEngine();this.setState(GAME_STATE.DRIVING);}
         break;}
       case GAME_STATE.ACHIEVEMENTS:{const act=menu.drawAchievements(this.achievements,input.mouse,W,H);if(act==='back') this.setState(GAME_STATE.MAIN_MENU);break;}
       case GAME_STATE.FLEET:{const act=menu.drawFleet(fleet,economy,progression,input.mouse,W,H);if(act==='back'){fleet.syncFromTruck(truck);this._save();this.setState(GAME_STATE.MAIN_MENU);}break;}

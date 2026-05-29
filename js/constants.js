@@ -253,7 +253,7 @@ export const GAME_STATE = Object.freeze({
   PAUSED:'paused', MISSION_COMPLETE:'mission_complete', GAME_OVER:'game_over',
   GARAGE:'garage', FLEET:'fleet', ACHIEVEMENTS:'achievements',
   PROFILE:'profile', DAILY_REWARD:'daily_reward', SETTINGS:'settings',
-  COUNTRY_MAP:'country_map',
+  COUNTRY_MAP:'country_map', TUTORIAL:'tutorial',
 });
 
 export const MISSION_PHASE = Object.freeze({PICKUP:'pickup',DELIVERY:'delivery',DONE:'done'});

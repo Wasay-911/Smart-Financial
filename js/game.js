@@ -20,6 +20,7 @@ import { AudioSystem }         from './systems/AudioSystem.js';
 import { MaintenanceSystem }   from './systems/MaintenanceSystem.js';
 import { FleetSystem }         from './systems/FleetSystem.js';
 import { CitySystem }          from './systems/CitySystem.js';
+import { TutorialSystem }      from './systems/TutorialSystem.js';
 
 import { NotificationSystem }  from './ui/NotificationSystem.js';
 import { HUD }                 from './ui/HUD.js';
@@ -50,6 +51,7 @@ const audio        = new AudioSystem();
 const maintenance  = new MaintenanceSystem();
 const fleet        = new FleetSystem();
 const cities       = new CitySystem();           // Phase 10
+const tutorial     = new TutorialSystem();       // v1.0 onboarding
 
 // ── Wire audio to user gesture ────────────────────────────
 const _audioInit = () => {
@@ -63,7 +65,8 @@ Object.assign(engine, {
   input, camera, physics, renderer, truck, missions, economy, upgrades,
   saveSystem:save, notif, hud, menu,
   audio, weather, progression, achievements, dailyReward, maintenance, fleet,
-  cities,       // Phase 10
+  cities,    // Phase 10
+  tutorial,  // v1.0
 });
 
 // ── Start ─────────────────────────────────────────────────

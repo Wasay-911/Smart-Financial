@@ -1,7 +1,9 @@
-// js/ui/MenuSystem.js – Phase 3 (achievements, daily reward, fleet, profile, settings)
+// js/ui/MenuSystem.js – v1.0 (tutorial, route preview, achievements, daily reward, fleet, profile, settings)
 
 import { clamp, rrect, uiBtn, shadeHex } from '../utils.js';
-import { UPGRADE_DEFS, CARGO_DEFS, TRUCK_DEFS, PAINT_COLORS } from '../constants.js';
+import { UPGRADE_DEFS, CARGO_DEFS, TRUCK_DEFS, PAINT_COLORS, CITIES, HIGHWAY, HIGHWAY_N25 } from '../constants.js';
+import { TUTORIAL_STEPS } from '../systems/TutorialSystem.js';
+import { CONFIG } from '../config.js';
 
 export class MenuSystem {
   constructor(ctx) {
@@ -124,7 +126,14 @@ export class MenuSystem {
       c.textAlign = 'left';
     });
 
-    const aby = H - 120;
+    // Route preview for selected mission
+    const selMission = pool[newSel];
+    if (selMission) {
+      const previewH = 110;
+      this.drawRoutePreview(c, selMission, W, H, W/2 - 190, H - 250, 380, previewH);
+    }
+
+    const aby = H - 125;
     if (uiBtn(c, '✓  ACCEPT CONTRACT', W/2-125, aby, 250, 52, {bg:'#C0392B',hov:'#2ECC71',txt:'#FFF',htxt:'#000',font:'bold 18px Segoe UI'}, mouse)) action = 'accept';
     if (uiBtn(c, '🔄 Refresh',          W/2+135, aby,     180, 52, {bg:'#1a3050',hov:'#3498DB',txt:'#FFF',htxt:'#FFF',font:'bold 14px Segoe UI'}, mouse)) action = 'refresh';
     if (uiBtn(c, '🗺 Map',              W/2+135, aby+60,  180, 42, {bg:'#0d1a1a',hov:'#1ABC9C',txt:'#FFF',htxt:'#FFF',font:'bold 14px Segoe UI'}, mouse)) action = 'map';
@@ -489,6 +498,110 @@ export class MenuSystem {
     if (uiBtn(c, muteLabel, W/2-100, py+78, 200, 46, {bg:'#1a2030',hov:'#3498DB',txt:'#FFF',htxt:'#FFF',font:'bold 15px Segoe UI'}, mouse)) act = 'toggleMute';
     if (uiBtn(c,'🗑  RESET SAVE', W/2-100, py+140, 200, 46, {bg:'#400a0a',hov:'#E74C3C',txt:'#FFF',htxt:'#FFF',font:'bold 15px Segoe UI'}, mouse)) act = 'resetSave';
     if (uiBtn(c,'← Close',       W/2-100, py+202, 200, 46, {bg:'#222',hov:'#444',txt:'#FFF',htxt:'#FFF',font:'bold 15px Segoe UI'}, mouse)) act = 'close';
+    // Version info
+    c.fillStyle = 'rgba(255,255,255,0.3)'; c.font = '11px Segoe UI'; c.textAlign = 'center';
+    c.fillText(`Mohallah Logestic  v${CONFIG.VERSION}`, W/2, py + ph - 14);
+    c.textAlign = 'left';
     return act;
+  }
+
+  // ── Tutorial Overlay ─────────────────────────────────────
+  /**
+   * @param {TutorialSystem} tutorial
+   * @param {Object} mouse
+   * @returns {'next'|'skip'|null}
+   */
+  drawTutorial(tutorial, mouse, W, H) {
+    const c    = this.ctx;
+    const step = tutorial.currentStep;
+    const pw   = Math.min(560, W - 40), ph = 360;
+    const px   = W / 2 - pw / 2, py = H / 2 - ph / 2;
+
+    // Dim background
+    c.fillStyle = 'rgba(0,0,10,0.82)'; c.fillRect(0, 0, W, H);
+    rrect(c, px, py, pw, ph, 16, '#0d1120', '#3498DB', 2);
+
+    // Step icon
+    c.font = '56px Segoe UI'; c.textAlign = 'center';
+    c.fillText(step.icon, W / 2, py + 72);
+
+    // Title
+    c.fillStyle = '#FFD700'; c.font = 'bold 22px Segoe UI';
+    c.fillText(step.title, W / 2, py + 112);
+
+    // Body
+    c.fillStyle = '#DDD'; c.font = '15px Segoe UI';
+    const words = step.body.split(' ');
+    let line = '', ly = py + 142;
+    const maxW = pw - 60;
+    c.textAlign = 'center';
+    for (const w of words) {
+      const test = line + w + ' ';
+      if (c.measureText(test).width > maxW && line) {
+        c.fillText(line.trim(), W / 2, ly); line = w + ' '; ly += 22;
+      } else { line = test; }
+    }
+    if (line) c.fillText(line.trim(), W / 2, ly);
+
+    // Hint
+    if (step.hint) {
+      c.fillStyle = '#F39C12'; c.font = 'italic 13px Segoe UI';
+      c.fillText(step.hint, W / 2, py + ph - 105);
+    }
+
+    // Progress dots
+    for (let i = 0; i < tutorial.totalSteps; i++) {
+      c.fillStyle = i === tutorial.stepIdx ? '#3498DB' : (i < tutorial.stepIdx ? '#2ECC71' : '#333');
+      c.beginPath(); c.arc(W / 2 - (tutorial.totalSteps - 1) * 12 + i * 24, py + ph - 72, 6, 0, Math.PI * 2); c.fill();
+    }
+
+    c.textAlign = 'left';
+    let act = null;
+    const nextLabel = tutorial.isLastStep ? '🚀  LET\'S DRIVE!' : 'Next  →';
+    if (uiBtn(c, nextLabel, W/2 + 10, py + ph - 54, 160, 44, {bg:'#2ECC71',hov:'#27AE60',txt:'#000',htxt:'#000',font:'bold 16px Segoe UI'}, mouse)) act = 'next';
+    if (uiBtn(c, 'Skip Tutorial', W/2 - 180, py + ph - 54, 160, 44, {bg:'#222',hov:'#444',txt:'#888',htxt:'#FFF',font:'14px Segoe UI'}, mouse)) act = 'skip';
+    return act;
+  }
+
+  // ── Route preview mini-panel (used inside mission select) ──
+  drawRoutePreview(c, mission, W, H, px, py, pw, ph) {
+    if (!mission) return;
+    rrect(c, px, py, pw, ph, 10, '#0d1a28', '#3498DB', 1);
+
+    // Route label
+    const fromDef = CITIES[mission.fromCity] || {name:'Unknown', color:'#888'};
+    const toDef   = CITIES[mission.toCity]   || {name:'Unknown', color:'#888'};
+    c.font = 'bold 14px Segoe UI'; c.textAlign = 'center';
+    c.fillStyle = fromDef.color; c.fillText(fromDef.name, px + pw*0.25, py + 22);
+    c.fillStyle = '#FFF'; c.fillText('→', px + pw*0.5, py + 22);
+    c.fillStyle = toDef.color;   c.fillText(toDef.name, px + pw*0.75, py + 22);
+
+    // Mini route map
+    const mapX = px + 10, mapY = py + 32, mapW = pw - 20, mapH = ph - 70;
+    rrect(c, mapX, mapY, mapW, mapH, 6, '#060e1a');
+    const WW = 22000, WH = 8000;
+    const sx = mapW / WW, sy = mapH / WH;
+    // Highways
+    c.strokeStyle = '#3D3D3D'; c.lineWidth = 2;
+    c.beginPath(); c.moveTo(mapX + HIGHWAY[0].x*sx, mapY + HIGHWAY[0].y*sy);
+    for (let i=1;i<HIGHWAY.length;i++) c.lineTo(mapX + HIGHWAY[i].x*sx, mapY + HIGHWAY[i].y*sy);
+    c.stroke();
+    c.strokeStyle = '#2a2a20'; c.lineWidth = 1;
+    c.beginPath(); c.moveTo(mapX + HIGHWAY_N25[0].x*sx, mapY + HIGHWAY_N25[0].y*sy);
+    for (let i=1;i<HIGHWAY_N25.length;i++) c.lineTo(mapX + HIGHWAY_N25[i].x*sx, mapY + HIGHWAY_N25[i].y*sy);
+    c.stroke();
+    // Origin/destination
+    [[fromDef, mission.fromCity], [toDef, mission.toCity]].forEach(([def, key]) => {
+      const city = CITIES[key]; if (!city) return;
+      c.fillStyle = def.color;
+      c.beginPath(); c.arc(mapX + city.x*sx, mapY + city.y*sy, 4, 0, Math.PI*2); c.fill();
+    });
+
+    // Stats row
+    const distKm   = Math.round((mission.routeDist || 2800) / 100) * 100;
+    const estTime  = Math.round(distKm / 200) + 1; // rough minutes at ~200 u/s
+    c.fillStyle = '#888'; c.font = '11px Segoe UI'; c.textAlign = 'center';
+    c.fillText(`~${distKm} units  ·  Est. ${estTime} min  ·  $${(mission.baseReward||0).toLocaleString()} reward`, px+pw/2, py+ph-10);
+    c.textAlign = 'left';
   }
 }
