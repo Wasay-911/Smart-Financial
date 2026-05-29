@@ -12,10 +12,10 @@ function smNoise(x, y) {
 }
 function fbm(x, y, oct=5) { let v=0, a=0.5, f=1; for(let i=0;i<oct;i++){v+=smNoise(x*f,y*f)*a;a*=0.5;f*=2;} return v; }
 
-const TERRAIN_SIZE = 11000;  // bigger world for longer routes
-const TERRAIN_SEGS = 180;
+const TERRAIN_SIZE = 11000;
+const TERRAIN_SEGS = 75;     // 75 = 5776 verts (was 180 = 32761 – crashed browser)
 const ROAD_WIDTH   = 12;
-const TREE_COUNT   = 900;
+const TREE_COUNT   = 350;    // instanced mesh – keep low for performance
 
 export class World3D {
   constructor(scene, mapConfig = DEFAULT_MAP) {
@@ -53,7 +53,7 @@ export class World3D {
     geo.rotateX(-Math.PI/2);
     const pos = geo.attributes.position;
     this._heightmap = new Float32Array(res*res);
-    this._roadPts   = this.roadCurve.getPoints(400);
+    this._roadPts   = this.roadCurve.getPoints(60);  // 60 pts enough for flattening
 
     for (let i=0;i<pos.count;i++) {
       const x=pos.getX(i), z=pos.getZ(i);
@@ -101,7 +101,24 @@ export class World3D {
   }
   _lerpCol(a,b,t){t=Math.max(0,Math.min(1,t));return[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t,a[2]+(b[2]-a[2])*t];}
   _lerp(a,b,t){return a+(b-a)*Math.max(0,Math.min(1,t));}
-  _distToRoadApprox(x,z){let mn=1e9;for(const p of this._roadPts){const d=Math.hypot(x-p.x,z-p.z);if(d<mn)mn=d;}return mn;}
+  _distToRoadApprox(x, z) {
+    if (!this._roadXZ) {
+      // build flat cache on first call
+      this._roadXZ = new Float32Array(this._roadPts.length * 2);
+      for (let i = 0; i < this._roadPts.length; i++) {
+        this._roadXZ[i*2]   = this._roadPts[i].x;
+        this._roadXZ[i*2+1] = this._roadPts[i].z;
+      }
+    }
+    const a = this._roadXZ;
+    let mn = 1e9;
+    for (let i = 0; i < a.length; i += 2) {
+      const dx = x - a[i], dz = z - a[i+1];
+      const d2 = dx*dx + dz*dz;
+      if (d2 < mn) mn = d2;
+    }
+    return Math.sqrt(mn);
+  }
 
   // ── Road ──────────────────────────────────────────────────
   _buildRoad() {

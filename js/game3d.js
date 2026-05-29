@@ -297,29 +297,59 @@ function buildUI_MissionSelect() {
 // ── START DRIVING ─────────────────────────────────────────────
 function startDriving() {
   if(uiOverlay){uiOverlay.remove();uiOverlay=null;}
-  buildWorld(selMap);
 
-  activeMission = selMission;
-  missionPhase  = 'pickup';
-  missionTimer  = activeMission.timeLim || 0;
-  appState      = 'DRIVING';
+  // Show loading screen BEFORE building (buildWorld can take ~100–200ms)
+  const loadEl = document.createElement('div');
+  loadEl.style.cssText = `
+    position:fixed;inset:0;background:#000011;z-index:300;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;
+    font-family:'Segoe UI',Arial,sans-serif;
+  `;
+  loadEl.innerHTML = `
+    <style>@keyframes sp{to{transform:rotate(360deg)}}</style>
+    <div style="width:52px;height:52px;border:4px solid rgba(255,215,0,.2);border-top-color:#FFD700;border-radius:50%;animation:sp .85s linear infinite"></div>
+    <div style="color:#FFD700;font-size:22px;font-weight:bold">Building 3D World…</div>
+    <div style="color:#555;font-size:12px">${MAPS[selMap]?.thumbnail || ''} ${MAPS[selMap]?.name || ''}</div>
+  `;
+  document.body.appendChild(loadEl);
 
-  // Place 3D markers near road endpoints
-  const pPickup  = world.roadCurve.getPoint(0.04);
-  const pDeliver = world.roadCurve.getPoint(0.93);
-  activeMission._pickup3D   = pPickup.clone();
-  activeMission._deliver3D  = pDeliver.clone();
+  // Use setTimeout(0) so the browser renders the loading screen first
+  setTimeout(() => {
+    try {
+      buildWorld(selMap);
+    } catch(err) {
+      console.error('[3D Build Error]', err);
+      loadEl.innerHTML = `
+        <div style="color:#E74C3C;font-size:20px;font-weight:bold">⚠ Failed to build world</div>
+        <div style="color:#888;font-size:14px">${err.message}</div>
+        <button onclick="buildUI_MapSelect()" style="margin-top:12px;padding:10px 24px;background:#C0392B;border:none;color:#FFF;border-radius:8px;cursor:pointer;font-size:15px">← Back to Maps</button>
+      `;
+      return;
+    }
 
-  pickupMarker3D   = create3DMarker(pPickup,   0x00FF66);
-  deliveryMarker3D = create3DMarker(pDeliver,  0xFF4422);
+    loadEl.remove();
 
-  updateWeatherUI();
-  showCameraUI();
-  hud.notify(`📦 ${activeMission.name}  ·  Drive to the GREEN beacon!`, '#FFD700', 5000);
-  audio.startEngine();
+    activeMission  = selMission;
+    missionPhase   = 'pickup';
+    missionTimer   = activeMission.timeLim || 0;
 
-  // Brief controls reminder
-  setTimeout(()=>hud.notify('WASD=Drive · Z=Weather · 1-4=Camera · TAB=Settings','#3498DB',4000), 5500);
+    // Place 3D markers near road endpoints
+    const pPickup  = world.roadCurve.getPoint(0.04);
+    const pDeliver = world.roadCurve.getPoint(0.93);
+    activeMission._pickup3D   = pPickup.clone();
+    activeMission._deliver3D  = pDeliver.clone();
+
+    pickupMarker3D   = create3DMarker(pPickup,   0x00FF66);
+    deliveryMarker3D = create3DMarker(pDeliver,  0xFF4422);
+
+    appState = 'DRIVING';   // set AFTER world is built successfully
+
+    updateWeatherUI();
+    showCameraUI();
+    hud.notify(`📦 ${activeMission.name}  ·  Drive to the GREEN beacon!`, '#FFD700', 5000);
+    audio.startEngine();
+    setTimeout(()=>hud.notify('W=Drive · Z=Weather · 1-4=Camera · TAB=Settings','#3498DB',4000), 5500);
+  }, 60); // 60ms: enough for one repaint
 }
 
 // ── MISSION COMPLETE ──────────────────────────────────────────
@@ -503,12 +533,22 @@ function gameLoop(ts) {
 
   // ── RENDER ────────────────────────────────────────────────
   if(world&&appState!=='IDLE'){
+    // Build a mission-proxy that matches what HUD3D._missionPanel expects
     const mData = activeMission ? {
-      active:{ name:activeMission.name, cargo:{type:activeMission.cargo,color:activeMission.col||'#888'},
-               fromCityDef:{name:activeMission.from},toCityDef:{name:activeMission.to},def:{baseReward:activeMission.reward},
-               timeBonusAmt:0 },
-      phase:missionPhase, timeRemaining:missionTimer, hasTimeLimit:!!activeMission?.timeLim,
-    } : {active:null,phase:null,timeRemaining:0,hasTimeLimit:false};
+      active: {
+        name:         activeMission.name,
+        cargo:        { type: activeMission.cargo, color: activeMission.col || '#888' },
+        fromCityDef:  { name: activeMission.from },
+        toCityDef:    { name: activeMission.to   },
+        def:          { baseReward: activeMission.reward },
+        timeBonusAmt: 0,
+      },
+      phase:         missionPhase,
+      timeRemaining: missionTimer,
+      hasTimeLimit:  !!activeMission.timeLim,
+      pickupPos:     activeMission._pickup3D  ? { x: activeMission._pickup3D.x,  y: activeMission._pickup3D.z  } : null,
+      deliveryPos:   activeMission._deliver3D ? { x: activeMission._deliver3D.x, y: activeMission._deliver3D.z } : null,
+    } : { active:null, phase:null, timeRemaining:0, hasTimeLimit:false, pickupPos:null, deliveryPos:null };
 
     hud.render(physics, mData, weather, camSys?.mode, roadPoints, dayNight?.timeOfDay||0.4);
 

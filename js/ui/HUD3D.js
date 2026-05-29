@@ -279,15 +279,17 @@ export class HUD3D {
 
   // ── Main render call ───────────────────────────────────────
   render(physics, missions, weather, camMode, roadPoints, timeOfDay) {
+    if (!physics) return;   // guard: called before world is ready
+
     // Speedometer
     this._drawGauge(
       this._speedCanvas,
-      Math.max(0, physics.speedKmh),
+      Math.max(0, physics.speedKmh || 0),
       140,
       'SPEED', 'km/h',
       '#3498DB',
       '#0a0a18',
-      `G${physics.gear}`
+      `G${physics.gear || 1}`
     );
 
     // RPM

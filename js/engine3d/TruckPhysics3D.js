@@ -7,7 +7,7 @@ export class TruckPhysics3D {
     this.world = world;
 
     // ── State ─────────────────────────────────────────────
-    this.position   = new THREE.Vector3(20, 2, -2000);
+    this.position   = new THREE.Vector3(20, 2, -4600); // near road start
     this.heading    = 0;      // yaw: 0 = facing +Z (into scene)
     this.speed      = 0;      // m/s, positive = forward
     this.pitch      = 0;      // visual only
@@ -143,6 +143,7 @@ export class TruckPhysics3D {
 
   // ── Accessors ─────────────────────────────────────────────
   get speedKmh()   { return this.speed * 3.6; }
+  get maxSpeed()   { return this.MAX_SPEED; }   // alias so HUD can read truck.maxSpeed
   get fuelPct()    { return this.fuel / this.maxFuel; }
   get healthPct()  { return this.health / 100; }
   get rpmPct()     { return (this.rpm - 750) / (4200 - 750); }
