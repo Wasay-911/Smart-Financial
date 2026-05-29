@@ -12,10 +12,10 @@ function smNoise(x, y) {
 }
 function fbm(x, y, oct=5) { let v=0, a=0.5, f=1; for(let i=0;i<oct;i++){v+=smNoise(x*f,y*f)*a;a*=0.5;f*=2;} return v; }
 
-const TERRAIN_SIZE = 6000;
-const TERRAIN_SEGS = 160;
+const TERRAIN_SIZE = 11000;  // bigger world for longer routes
+const TERRAIN_SEGS = 180;
 const ROAD_WIDTH   = 12;
-const TREE_COUNT   = 700;
+const TREE_COUNT   = 900;
 
 export class World3D {
   constructor(scene, mapConfig = DEFAULT_MAP) {
