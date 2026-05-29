@@ -81,13 +81,14 @@ export class MenuSystem {
   }
 
   // ── Mission Select ────────────────────────────────────────
-  drawMissionSelect(missions, mouse, W, H) {
+  drawMissionSelect(missions, cities, mouse, W, H) {
     const c = this.ctx;
     c.fillStyle = '#0d1117'; c.fillRect(0, 0, W, H);
     c.fillStyle = '#FFD700'; c.font = 'bold 32px Segoe UI'; c.textAlign = 'center';
     c.fillText('SELECT CONTRACT', W / 2, 58);
-    c.fillStyle = '#888'; c.font = '15px Segoe UI';
-    c.fillText('Choose your cargo contract', W / 2, 86);
+    const unlocked = cities ? cities.getUnlocked() : ['KARACHI','HYDERABAD'];
+    c.fillStyle = '#888'; c.font = '14px Segoe UI';
+    c.fillText(`${unlocked.length} cities unlocked  |  Choose your cargo contract`, W / 2, 84);
     c.textAlign = 'left';
 
     const pool = missions.displayMissions;
@@ -109,7 +110,9 @@ export class MenuSystem {
       c.fillStyle = '#FFD700'; c.font = 'bold 15px Segoe UI'; c.fillText(m.name, cx + 32, cy + 32);
       c.fillStyle = m.difficultyColor || '#888'; c.font = '11px Segoe UI'; c.fillText(m.difficulty, cx + 32, cy + 50);
       c.fillStyle = '#AAA'; c.font = '12px Segoe UI'; c.fillText(cargo.desc, cx + 32, cy + 68);
-      c.fillStyle = '#666'; c.font = '11px Segoe UI'; c.fillText('Karachi → Hyderabad', cx + 32, cy + 86);
+      const fromCity = m.fromCity || 'Karachi', toCity = m.toCity || 'Hyderabad';
+      const routeDist = m.routeDist ? Math.round(m.routeDist/100)*100+' u' : '';
+      c.fillStyle = '#666'; c.font = '11px Segoe UI'; c.fillText(`${fromCity} → ${toCity}  ${routeDist}`, cx + 32, cy + 86);
       if (m.timeLimit) {
         const mins = Math.floor(m.timeLimit / 60), secs = m.timeLimit % 60;
         c.fillStyle = '#FF6B35'; c.font = 'bold 11px Segoe UI';
@@ -123,7 +126,8 @@ export class MenuSystem {
 
     const aby = H - 120;
     if (uiBtn(c, '✓  ACCEPT CONTRACT', W/2-125, aby, 250, 52, {bg:'#C0392B',hov:'#2ECC71',txt:'#FFF',htxt:'#000',font:'bold 18px Segoe UI'}, mouse)) action = 'accept';
-    if (uiBtn(c, '🔄 Refresh ($0)',     W/2+135, aby, 180, 52, {bg:'#1a3050',hov:'#3498DB',txt:'#FFF',htxt:'#FFF',font:'bold 14px Segoe UI'}, mouse)) action = 'refresh';
+    if (uiBtn(c, '🔄 Refresh',          W/2+135, aby,     180, 52, {bg:'#1a3050',hov:'#3498DB',txt:'#FFF',htxt:'#FFF',font:'bold 14px Segoe UI'}, mouse)) action = 'refresh';
+    if (uiBtn(c, '🗺 Map',              W/2+135, aby+60,  180, 42, {bg:'#0d1a1a',hov:'#1ABC9C',txt:'#FFF',htxt:'#FFF',font:'bold 14px Segoe UI'}, mouse)) action = 'map';
     if (uiBtn(c, '← Back',             W/2-315, aby, 150, 52, {bg:'#222',hov:'#444',txt:'#FFF',htxt:'#FFF',font:'bold 15px Segoe UI'}, mouse)) action = 'back';
     return { action, selectedIdx: newSel };
   }

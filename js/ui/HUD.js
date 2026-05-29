@@ -1,7 +1,7 @@
 // js/ui/HUD.js – Phase 3 HUD (XP bar, level, weather, time limit countdown, wear)
 
 import { clamp, lerp, rrect, dist } from '../utils.js';
-import { HIGHWAY } from '../constants.js';
+import { HIGHWAY, HIGHWAY_N25, CITIES, CITY_ORDER } from '../constants.js';
 
 export class HUD {
   constructor(ctx) { this.ctx = ctx; }
@@ -137,16 +137,33 @@ export class HUD {
     c.textAlign = 'left';
   }
 
-  // ── Minimap ───────────────────────────────────────────────
+  // ── Minimap (full Pakistan country view) ─────────────────
   _minimap(truck, missions, W, H) {
-    const c = this.ctx, mmX = 18, mmY = H - 355, mmW = 178, mmH = 130;
-    const WORLD_W = 9000, WORLD_H = 4000;
+    const c = this.ctx, mmX = 18, mmY = H - 365, mmW = 220, mmH = 100;
+    const WORLD_W = 22000, WORLD_H = 8000;
     const sx = mmW / WORLD_W, sy = mmH / WORLD_H;
-    rrect(c, mmX, mmY, mmW, mmH, 6, 'rgba(0,0,0,0.82)', '#555', 1);
+    rrect(c, mmX, mmY, mmW, mmH, 6, 'rgba(0,0,0,0.85)', '#555', 1);
+
+    // N5 main highway
     c.strokeStyle = '#555'; c.lineWidth = 2;
     c.beginPath(); c.moveTo(mmX + HIGHWAY[0].x * sx, mmY + HIGHWAY[0].y * sy);
     for (let i = 1; i < HIGHWAY.length; i++) c.lineTo(mmX + HIGHWAY[i].x * sx, mmY + HIGHWAY[i].y * sy);
     c.stroke();
+
+    // N25 branch
+    c.strokeStyle = '#443'; c.lineWidth = 1.5;
+    c.beginPath(); c.moveTo(mmX + HIGHWAY_N25[0].x * sx, mmY + HIGHWAY_N25[0].y * sy);
+    for (let i = 1; i < HIGHWAY_N25.length; i++) c.lineTo(mmX + HIGHWAY_N25[i].x * sx, mmY + HIGHWAY_N25[i].y * sy);
+    c.stroke();
+
+    // City dots on minimap
+    for (const key of CITY_ORDER) {
+      const city = CITIES[key];
+      const cx = mmX + city.x * sx, cy = mmY + city.y * sy;
+      c.fillStyle = city.color; c.globalAlpha = 0.9;
+      c.beginPath(); c.arc(cx, cy, 3, 0, Math.PI * 2); c.fill();
+    }
+    c.globalAlpha = 1;
     if (missions.active) {
       const tPos = missions.phase === 'pickup' ? missions.pickupPos : missions.deliveryPos;
       const tCol = missions.phase === 'pickup' ? '#2ECC71' : '#E74C3C';
@@ -166,12 +183,12 @@ export class HUD {
   // ── Controls ──────────────────────────────────────────────
   _controls(W, H) {
     const c = this.ctx;
-    rrect(c, 18, H - 205, 182, 186, 10, 'rgba(0,0,0,0.72)', '#444', 1);
-    c.fillStyle = '#FFD700'; c.font = 'bold 12px Segoe UI'; c.fillText('CONTROLS', 32, H - 182);
+    rrect(c, 18, H - 222, 182, 203, 10, 'rgba(0,0,0,0.72)', '#444', 1);
+    c.fillStyle = '#FFD700'; c.font = 'bold 12px Segoe UI'; c.fillText('CONTROLS', 32, H - 198);
     c.fillStyle = '#CCC'; c.font = '11px Segoe UI';
     ['W/↑  Accelerate','S/↓  Brake / Rev.','A/←  Steer Left','D/→  Steer Right',
      'F     Refuel','R     Repair','T     Service','H     Horn',
-     'U     Garage','ESC  Pause'].forEach((l, i) => c.fillText(l, 32, H - 160 + i * 17));
+     'M    Country Map','U     Garage','ESC  Pause'].forEach((l, i) => c.fillText(l, 32, H - 176 + i * 17));
   }
 
   // ── Weather badge ─────────────────────────────────────────
