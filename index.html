@@ -3,32 +3,115 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <meta name="description" content="Mohallah Logestic – Truck Simulation RPG. Drive trucks across Pakistan, deliver cargo, earn money and build your logistics empire.">
-  <title>Mohallah Logestic – Truck Simulation RPG</title>
-  <!-- Inline SVG favicon – no 404 errors -->
+  <meta name="description" content="Mohallah Logestic 3D – AAA Truck Simulation RPG in the browser">
+  <title>Mohallah Logestic 3D</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230d1117'/%3E%3Ctext x='16' y='24' font-size='22' text-anchor='middle'%3E🚛%3C/text%3E%3C/svg%3E">
-  <link rel="stylesheet" href="css/style.css">
+
+  <!-- Three.js import map (r164 stable) -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.164.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.164.0/examples/jsm/"
+    }
+  }
+  </script>
+
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    html, body {
+      width:100%; height:100%; background:#000;
+      overflow:hidden; font-family:'Segoe UI',Arial,sans-serif;
+      touch-action:none; user-select:none;
+    }
+    canvas#c { display:block; width:100vw; height:100vh; cursor:crosshair; }
+
+    /* Loading overlay */
+    #loading {
+      position:fixed; inset:0; z-index:1000;
+      background: linear-gradient(135deg, #06071a 0%, #181a3a 100%);
+      display:flex; flex-direction:column; align-items:center; justify-content:center;
+      transition: opacity 0.8s ease;
+    }
+    #loading.hidden { opacity:0; pointer-events:none; }
+    #loading .logo {
+      font-size: clamp(32px, 6vw, 64px);
+      font-weight: 900; color:#FFD700;
+      text-shadow: 0 0 40px rgba(255,215,0,0.6);
+      letter-spacing: 0.06em; margin-bottom:8px;
+    }
+    #loading .sub {
+      color:#F39C12; font-size:clamp(13px, 2vw, 18px);
+      letter-spacing:0.12em; margin-bottom:40px;
+    }
+    #loading .spinner {
+      width:56px; height:56px;
+      border:5px solid rgba(255,215,0,0.2);
+      border-top-color:#FFD700; border-radius:50%;
+      animation:spin 0.9s linear infinite; margin-bottom:24px;
+    }
+    #loading .status { color:#666; font-size:13px; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+
+    /* Classic 2D link */
+    #link2d {
+      position:fixed; bottom:16px; right:16px; z-index:5;
+      background:rgba(0,0,0,0.7); border:1px solid #333;
+      border-radius:8px; padding:6px 14px;
+      color:#666; font-size:11px; text-decoration:none;
+      transition:color 0.2s, border-color 0.2s;
+    }
+    #link2d:hover { color:#FFD700; border-color:#FFD700; }
+
+    /* HUD animation keyframe */
+    @keyframes fadeInOut {
+      0%   { opacity:0; transform:translateY(-10px); }
+      15%  { opacity:1; transform:translateY(0);     }
+      80%  { opacity:1; transform:translateY(0);     }
+      100% { opacity:0; transform:translateY(-10px); }
+    }
+  </style>
 </head>
 <body>
 
-<!-- Loading splash (hidden once game starts) -->
+<!-- Loading splash -->
 <div id="loading">
   <div class="spinner"></div>
-  MOHALLAH LOGESTIC
+  <div class="logo">MOHALLAH LOGESTIC 3D</div>
+  <div class="sub">TRUCK SIMULATION RPG</div>
+  <div class="status" id="loadStatus">Initialising Three.js WebGL engine…</div>
 </div>
 
+<!-- WebGL canvas -->
 <canvas id="c"></canvas>
 
-<script type="module" src="js/game.js"></script>
-<script>
-  // Hide loading splash when game module is ready
-  window.addEventListener('load', () => {
+<!-- Link to 2D classic -->
+<a id="link2d" href="game2d.html" title="Play the 2D version">🎮 Classic 2D Version</a>
+
+<!-- 3D Game entry point -->
+<script type="module">
+  (async () => {
+    const status  = document.getElementById('loadStatus');
+    const loading = document.getElementById('loading');
+    const setStatus = m => { if (status) status.textContent = m; };
+
+    setStatus('Loading Three.js from CDN…');
+    try {
+      setStatus('Building 3D world – please wait…');
+      await import('./js/game3d.js');
+    } catch (e) {
+      console.error('[Mohallah Logestic 3D] Failed to start:', e);
+      setStatus('⚠ Error: ' + (e.message || e) + ' — Press F12 for details');
+      return;
+    }
+
     setTimeout(() => {
-      const el = document.getElementById('loading');
-      if (el) el.classList.add('hidden');
-      setTimeout(() => el && el.remove(), 600);
-    }, 400);
-  });
+      if (loading) {
+        loading.classList.add('hidden');
+        setTimeout(() => loading?.remove(), 900);
+      }
+    }, 1500);
+  })();
 </script>
 </body>
 </html>
