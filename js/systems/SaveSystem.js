@@ -1,79 +1,91 @@
-// js/systems/SaveSystem.js – LocalStorage persistence with validation
+// js/systems/SaveSystem.js – LocalStorage persistence v3 with migration
 
-const SAVE_KEY    = 'mohallah_v2';
-const SAVE_VER    = 2;
-const AUTO_INTERVAL = 60; // seconds
+const SAVE_KEY = 'mohallah_v3';
+const SAVE_VER = 3;
+const AUTO_INTERVAL = 60;
 
 export class SaveSystem {
   constructor() {
     this._lastAutoSave = 0;
   }
 
-  /** Build save payload from live game objects */
-  buildPayload(truck, economy, missionCount) {
-    return {
-      version:      SAVE_VER,
-      ts:           Date.now(),
-      missionCount,
-      truck:        truck.toJSON(),
-      economy:      economy.toJSON(),
-    };
-  }
-
-  /** Write to localStorage */
-  save(truck, economy, missionCount) {
+  save(state) {
     try {
-      const data = JSON.stringify(this.buildPayload(truck, economy, missionCount));
-      localStorage.setItem(SAVE_KEY, data);
+      const payload = {
+        version:       SAVE_VER,
+        ts:            Date.now(),
+        economy:       state.economy.toJSON(),
+        fleet:         state.fleet.toJSON(),
+        progression:   state.progression.toJSON(),
+        achievements:  state.achievements.toJSON(),
+        dailyReward:   state.dailyReward.toJSON(),
+        missionCount:  state.missions.missionCount,
+        // Aggregate stats
+        stats: {
+          totalEarned:      state.economy.totalEarned,
+          missionCount:     state.missions.missionCount,
+          cargoTypesDelivered: [...state.missions.cargoTypesDelivered],
+          cleanStreak:      state.missions.cleanStreak,
+          maxSpeedReached:  state.stats?.maxSpeedReached || 0,
+          totalKm:          state.truck.totalKm,
+          offRoadKm:        state.stats?.offRoadKm || 0,
+          maxSingleHit:     state.stats?.maxSingleHit || 0,
+          lastRunClean:     state.missions.lastCompleted?.noDamage || false,
+          deliveredInStorm: state.missions.deliveredInStorm,
+          deliveredAtNight: state.missions.deliveredAtNight,
+          lastNoRefuel:     state.missions.lastNoRefuel,
+          loginStreak:      state.dailyReward.streak,
+        },
+      };
+      localStorage.setItem(SAVE_KEY, JSON.stringify(payload));
       return true;
-    } catch (e) {
-      console.warn('[SaveSystem] Could not save:', e);
-      return false;
-    }
+    } catch (e) { console.warn('[Save] Failed:', e); return false; }
   }
 
-  /** Read and validate from localStorage */
   load() {
     try {
       const raw = localStorage.getItem(SAVE_KEY);
       if (!raw) return null;
       const data = JSON.parse(raw);
-      if (!this._validate(data)) { console.warn('[SaveSystem] Invalid save data'); return null; }
+      if (!this._validate(data)) return null;
       return data;
-    } catch (e) {
-      console.warn('[SaveSystem] Could not load:', e);
-      return null;
+    } catch (e) { console.warn('[Save] Load failed:', e); return null; }
+  }
+
+  applyTo(data, state) {
+    if (!data) { state.fleet.initStarter(); return; }
+    state.economy.fromJSON(data.economy);
+    state.fleet.fromJSON(data.fleet);
+    state.fleet.applyToTruck(state.truck);
+    state.progression.fromJSON(data.progression);
+    state.achievements.fromJSON(data.achievements);
+    state.dailyReward.fromJSON(data.dailyReward);
+    state.missions.missionCount = data.missionCount || 0;
+    // Restore stats
+    if (data.stats) {
+      state.stats.maxSpeedReached = data.stats.maxSpeedReached || 0;
+      state.stats.offRoadKm       = data.stats.offRoadKm       || 0;
+      state.stats.maxSingleHit    = data.stats.maxSingleHit    || 0;
+      state.missions.cargoTypesDelivered = new Set(data.stats.cargoTypesDelivered || []);
+      state.missions.cleanStreak  = data.stats.cleanStreak     || 0;
     }
   }
 
-  /** Apply loaded data to truck and economy */
-  applyTo(data, truck, economy) {
-    if (!data) return 0;
-    truck.fromJSON(data.truck);
-    economy.fromJSON(data.economy);
-    return data.missionCount || 0;
-  }
-
-  /** Trigger auto-save every AUTO_INTERVAL seconds */
-  tick(dt, truck, economy, missionCount) {
+  tick(dt, state) {
     this._lastAutoSave += dt;
     if (this._lastAutoSave >= AUTO_INTERVAL) {
       this._lastAutoSave = 0;
-      this.save(truck, economy, missionCount);
+      this.save(state);
     }
   }
 
-  /** Wipe save data */
-  reset() {
-    try { localStorage.removeItem(SAVE_KEY); } catch (e) {}
-  }
+  reset() { try { localStorage.removeItem(SAVE_KEY); } catch (e) {} }
 
   _validate(data) {
-    if (typeof data !== 'object' || data === null) return false;
+    if (!data || typeof data !== 'object') return false;
     if (data.version !== SAVE_VER) return false;
     if (typeof data.economy?.money !== 'number') return false;
-    // Basic anti-cheat: cap money at $10 million
-    if (data.economy.money > 10_000_000) return false;
+    if (data.economy.money > 100_000_000) return false;  // anti-cheat cap $100M
     return true;
   }
 }

@@ -1,44 +1,44 @@
-// js/entities/Obstacle.js – Static obstacles and NPC traffic
+// js/entities/Obstacle.js – Static obstacles + NPC traffic (truck, car, bus, motorcycle)
 
 import { clamp } from '../utils.js';
 import { HIGHWAY, WORLD_W } from '../constants.js';
 
-/** Static obstacle (rock, barrel) */
 export class StaticObstacle {
   constructor(def) {
-    this.x = def.x;
-    this.y = def.y;
+    this.x = def.x; this.y = def.y;
     this.type = def.type;
     this.collisionRadius = def.r;
     this.damage = def.dmg;
-    this.isNPC = false;
+    this.isNPC  = false;
   }
-
-  update(_dt) {}  // static – no movement
+  update(_dt) {}
 }
 
 /**
- * NPC vehicle that follows the highway waypoints in a loop.
- * Drives from Karachi (index 0) to Hyderabad (last index) then resets.
+ * NPC Vehicle – follows the highway waypoints in a loop.
+ * Supports types: 'truck' | 'car' | 'bus' | 'moto'
  */
 export class NPCVehicle {
   constructor(def) {
-    this.type  = def.type;  // 'truck' | 'car'
-    this.color = def.color;
-    this.speed = def.speed; // km/h in game units/s
-    this.laneOff = def.laneOff || 12; // lateral offset from road centre
+    this.type     = def.type;
+    this.color    = def.color;
+    this.speed    = def.speed;
+    this.laneOff  = def.laneOff || 10;
 
     this.waypointIdx = clamp(def.waypointIdx || 0, 0, HIGHWAY.length - 2);
     this.x     = HIGHWAY[this.waypointIdx].x;
     this.y     = HIGHWAY[this.waypointIdx].y + this.laneOff;
-    this.angle = Math.PI / 2; // initially facing east
-
-    // Collision
+    this.angle = Math.PI / 2;
     this.isNPC = true;
-    this.collisionRadius = this.type === 'truck' ? 28 : 20;
-    this.damage = this.type === 'truck' ? 15 : 10;
 
-    this._progress = 0; // distance along current segment
+    // Per-type physical profile
+    switch (this.type) {
+      case 'truck': this.collisionRadius = 28; this.damage = 15; break;
+      case 'car':   this.collisionRadius = 18; this.damage = 10; break;
+      case 'bus':   this.collisionRadius = 32; this.damage = 20; break;
+      case 'moto':  this.collisionRadius = 10; this.damage = 6;  break;
+      default:      this.collisionRadius = 20; this.damage = 12;
+    }
   }
 
   update(dt) {
@@ -50,28 +50,21 @@ export class NPCVehicle {
       return;
     }
 
-    const curr = HIGHWAY[this.waypointIdx];
     const next = HIGHWAY[this.waypointIdx + 1];
-
-    const tx = next.x + this.laneOff * Math.sin(this.angle);
-    const ty = next.y;
-    const dx = tx - this.x;
-    const dy = ty - this.y;
-    const d  = Math.hypot(dx, dy);
+    const tx   = next.x;
+    const ty   = next.y + (this.laneOff * (this.type === 'moto' ? Math.sin(Date.now()/2000) : 1));
+    const dx   = tx - this.x;
+    const dy   = ty - this.y;
+    const d    = Math.hypot(dx, dy);
 
     if (d < this.speed * dt + 4) {
       this.waypointIdx++;
       return;
     }
 
-    // Update facing angle
-    // Convention: sin(angle)*speed = vx, -cos(angle)*speed = vy
     this.angle = Math.atan2(dx, -dy);
-
     this.x += (dx / d) * this.speed * dt;
     this.y += (dy / d) * this.speed * dt;
-
-    // Clamp to world
-    this.x = clamp(this.x, 0, WORLD_W);
+    this.x  = clamp(this.x, 0, WORLD_W);
   }
 }
