@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="description" content="Mohallah Logestic – Truck Simulation RPG. Drive trucks across Pakistan, deliver cargo, earn money and build your logistics empire.">
+  <title>Mohallah Logestic – Truck Simulation RPG</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- Loading splash (hidden once game starts) -->
+<div id="loading">
+  <div class="spinner"></div>
+  MOHALLAH LOGESTIC
+</div>
+
+<canvas id="c"></canvas>
+
+<script type="module" src="js/game.js"></script>
+<script>
+  // Hide loading splash when game module is ready
+  window.addEventListener('load', () => {
+    setTimeout(() => {
+      const el = document.getElementById('loading');
+      if (el) el.classList.add('hidden');
+      setTimeout(() => el && el.remove(), 600);
+    }, 400);
+  });
+</script>
+</body>
+</html>
